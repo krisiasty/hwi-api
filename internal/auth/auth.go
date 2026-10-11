@@ -125,11 +125,15 @@ func (a *Authenticator) Authenticate(r *http.Request) (Method, error) {
 // which they mean:
 //
 //   - A pin containing "=" is DN-shaped: it is matched against the whole
-//     Subject distinguished name, and, when written as "CN=value", against
-//     the Subject common name. A Subject Alternative Name never satisfies a
-//     DN-shaped pin — narrowing to one Subject identity is the point of
-//     writing a pin this way, and letting any SAN the same CA vouched for
-//     also satisfy it would defeat that narrowing.
+//     Subject distinguished name, and, when it names a single CN and
+//     nothing else ("CN=value"), against the Subject common name. A pin
+//     with further attributes ("CN=value,O=org") is a full DN and must
+//     match the whole Subject DN: falling back to the CN would admit a
+//     certificate whose CN merely spells out those attributes. A Subject
+//     Alternative Name never satisfies a DN-shaped pin — narrowing to one
+//     Subject identity is the point of writing a pin this way, and letting
+//     any SAN the same CA vouched for also satisfy it would defeat that
+//     narrowing.
 //   - A pin with no "=" is a bare name: it is matched against the Subject
 //     common name (exactly) or against any DNS Subject Alternative Name
 //     (case-insensitively, since DNS names are).
@@ -144,12 +148,13 @@ func (a *Authenticator) subjectAllowed(chains [][]*x509.Certificate) bool {
 		leaf := chain[0]
 		for _, want := range a.allowedSubjects {
 			if strings.Contains(want, "=") {
-				// DN-shaped: match the whole DN, or the CN when so
-				// written. A SAN is deliberately never consulted here.
+				// DN-shaped: match the whole DN, or the CN when the pin
+				// names a single CN. A SAN is deliberately never consulted
+				// here.
 				if leaf.Subject.String() == want {
 					return true
 				}
-				if strings.HasPrefix(want, "CN=") && leaf.Subject.CommonName == strings.TrimPrefix(want, "CN=") {
+				if cn, ok := singleCNPin(want); ok && leaf.Subject.CommonName == cn {
 					return true
 				}
 				continue
@@ -167,6 +172,55 @@ func (a *Authenticator) subjectAllowed(chains [][]*x509.Certificate) bool {
 		}
 	}
 	return false
+}
+
+// singleCNPin reports whether a DN-shaped pin names a single CN and nothing
+// else, and if so returns the CN value with its RFC 4514 escapes decoded.
+// An unescaped "," or ";" separates RDNs and an unescaped "+" joins
+// attributes within one, so either makes the pin a full DN rather than a
+// single CN. A backslash must introduce one of RFC 4514's special
+// characters or a complete pair of hex digits; any other escape is
+// malformed and gets no CN fallback, rather than being read as some other
+// CN by dropping the backslash.
+func singleCNPin(pin string) (string, bool) {
+	value, ok := strings.CutPrefix(pin, "CN=")
+	if !ok {
+		return "", false
+	}
+	var cn strings.Builder
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		switch c {
+		case ',', ';', '+':
+			return "", false
+		case '\\':
+			if i+1 >= len(value) {
+				return "", false
+			}
+			switch next := value[i+1]; {
+			case isHex(next):
+				// A hex digit starts a hexpair; it needs its second digit.
+				if i+2 >= len(value) || !isHex(value[i+2]) {
+					return "", false
+				}
+				b, _ := hex.DecodeString(value[i+1 : i+3])
+				cn.WriteByte(b[0])
+				i += 2
+			case strings.IndexByte(`\"+,;<>#= `, next) >= 0:
+				cn.WriteByte(next)
+				i++
+			default:
+				return "", false
+			}
+		default:
+			cn.WriteByte(c)
+		}
+	}
+	return cn.String(), true
+}
+
+func isHex(c byte) bool {
+	return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
 }
 
 // tokenAllowed compares digests in constant time. Tokens carry at least
