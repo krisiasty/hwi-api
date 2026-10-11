@@ -27,30 +27,41 @@ func virtStore(t *testing.T, vendor string, capabilities ...string) *inventory.S
 	return store
 }
 
-// Only x86 reports a hypervisor bit among its CPU capabilities. arm64's
-// Features never include one, so their presence must not count as
-// bare-metal evidence that overrides a hypervisor named in DMI.
-func TestCollectVirtSignalsOnlyTrustsTheHypervisorFlagOnX86(t *testing.T) {
+// cpuinfoRoot is a host root whose /proc/cpuinfo lists one CPU's
+// capabilities under key, "flags" on x86 or "Features" on arm64.
+func cpuinfoRoot(key, capabilities string) fstest.MapFS {
+	return fstest.MapFS{"proc/cpuinfo": &fstest.MapFile{Data: []byte("processor\t: 0\n" + key + "\t\t: " + capabilities + "\n\n")}}
+}
+
+// Only x86's cpuinfo flags carry a hypervisor bit; arm64's Features never
+// do, so their presence must not count as bare-metal evidence that
+// overrides a hypervisor named in DMI. Which one the host reports is read
+// from its cpuinfo, never from the agent's GOARCH: under user-mode
+// emulation an amd64 agent reads an arm64 host's Features, so each case
+// here holds whatever architecture the test itself runs on.
+func TestCollectVirtSignalsOnlyTrustsTheHypervisorFlagFromX86Flags(t *testing.T) {
 	tests := []struct {
 		name           string
-		arch           string
+		root           fstest.MapFS
 		vendor         string
 		capabilities   []string
 		wantType       string
 		wantTechnology string
 		wantConfidence string
 	}{
-		{"arm64 guest named by DMI", "arm64", "ARM", []string{"fp", "asimd", "aes"}, inventory.TypeVirtual, "kvm", "medium"},
-		{"x86 guest with the hypervisor flag", "amd64", "GenuineIntel", []string{"fpu", "hypervisor", "sse2"}, inventory.TypeVirtual, "kvm", "high"},
+		{"arm64 guest named by DMI", cpuinfoRoot("Features", "fp asimd aes"), "ARM", []string{"fp", "asimd", "aes"}, inventory.TypeVirtual, "kvm", "medium"},
+		{"x86 guest with the hypervisor flag", cpuinfoRoot("flags", "fpu hypervisor sse2"), "GenuineIntel", []string{"fpu", "hypervisor", "sse2"}, inventory.TypeVirtual, "kvm", "high"},
 		// A bare-metal instance can carry a hypervisor vendor's DMI
 		// strings; on x86 the missing flag still outranks them.
-		{"x86 without the hypervisor flag", "amd64", "GenuineIntel", []string{"fpu", "sse2"}, inventory.TypePhysical, "", "high"},
-		{"386 without the hypervisor flag", "386", "GenuineIntel", []string{"fpu", "sse2"}, inventory.TypePhysical, "", "high"},
+		{"x86 without the hypervisor flag", cpuinfoRoot("flags", "fpu sse2"), "GenuineIntel", []string{"fpu", "sse2"}, inventory.TypePhysical, "", "high"},
+		// Without cpuinfo the capabilities' source is unknown, so they are
+		// not evidence either way.
+		{"capabilities but no cpuinfo", fstest.MapFS{}, "GenuineIntel", []string{"fpu", "sse2"}, inventory.TypeVirtual, "kvm", "medium"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := virtStore(t, tt.vendor, tt.capabilities...)
-			got := inventory.Detect(collectVirtSignals(store, fstest.MapFS{}, tt.arch))
+			got := inventory.Detect(collectVirtSignals(store, tt.root))
 			if got.Type != tt.wantType || got.Technology != tt.wantTechnology || got.Confidence != tt.wantConfidence {
 				t.Errorf("Detect = %s/%q/%s, want %s/%q/%s (evidence %v)",
 					got.Type, got.Technology, got.Confidence, tt.wantType, tt.wantTechnology, tt.wantConfidence, got.Evidence)
