@@ -50,13 +50,19 @@ func newTestCA(t *testing.T) *testCA {
 // issue returns a leaf certificate signed by this CA.
 func (ca *testCA) issue(t *testing.T, cn string, dnsNames ...string) *x509.Certificate {
 	t.Helper()
+	return ca.issueSubject(t, pkix.Name{CommonName: cn}, dnsNames...)
+}
+
+// issueSubject is issue for a Subject with more than a common name.
+func (ca *testCA) issueSubject(t *testing.T, subject pkix.Name, dnsNames ...string) *x509.Certificate {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: cn},
+		Subject:      subject,
 		DNSNames:     dnsNames,
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),

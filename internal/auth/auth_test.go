@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"errors"
 	"net/http"
@@ -121,6 +122,55 @@ func TestMTLSSubjectPinning(t *testing.T) {
 	}
 	if _, err := bareAuth.Authenticate(request(t, "", []*x509.Certificate{bySAN, ca.cert})); err != nil {
 		t.Errorf("a bare pin should be satisfied by a SAN match: %v", err)
+	}
+}
+
+// TestMTLSFullDNPinIsNotACommonNamePin covers the line between the two
+// DN-shaped forms: only a pin naming a single CN may fall back to the
+// Subject common name. A full-DN pin must match the whole Subject DN, so a
+// CA-issued CN that merely spells out the pin's extra attributes is refused.
+func TestMTLSFullDNPinIsNotACommonNamePin(t *testing.T) {
+	ca := newTestCA(t)
+	caFile := ca.writePEM(t)
+
+	literalCN := ca.issue(t, "inventory-client,O=Trusted")
+	literalPlusCN := ca.issue(t, "inventory-client+O=Trusted")
+	fullDN := ca.issueSubject(t, pkix.Name{CommonName: "inventory-client", Organization: []string{"Trusted"}})
+	extraAttrs := ca.issueSubject(t, pkix.Name{CommonName: "inventory-client", Organization: []string{"Other"}})
+
+	tests := []struct {
+		name  string
+		pin   string
+		leaf  *x509.Certificate
+		admit bool
+	}{
+		{"full-DN pin admits the matching Subject DN", "CN=inventory-client,O=Trusted", fullDN, true},
+		{"full-DN pin refuses a CN spelling out its attributes", "CN=inventory-client,O=Trusted", literalCN, false},
+		{"full-DN pin refuses a different organization", "CN=inventory-client,O=Trusted", extraAttrs, false},
+		{"multi-valued RDN pin refuses a CN spelling out its attributes", "CN=inventory-client+O=Trusted", literalPlusCN, false},
+		{"single-CN pin admits a Subject with further attributes", "CN=inventory-client", extraAttrs, true},
+		{"escaped single-CN pin admits the literal CN", `CN=inventory-client\,O=Trusted`, literalCN, true},
+		{"hex-escaped single-CN pin admits the literal CN", `CN=inventory-client\2CO=Trusted`, literalCN, true},
+		{"escaped single-CN pin refuses the unescaped DN", `CN=inventory-client\,O=Trusted`, fullDN, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a, err := New(config.AuthConfig{MTLS: config.MTLSConfig{
+				Enabled:         true,
+				ClientCAFile:    caFile,
+				AllowedSubjects: []string{tt.pin},
+			}})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			_, err = a.Authenticate(request(t, "", []*x509.Certificate{tt.leaf, ca.cert}))
+			if tt.admit && err != nil {
+				t.Errorf("pin %q, subject %q: err = %v, want admitted", tt.pin, tt.leaf.Subject, err)
+			}
+			if !tt.admit && !errors.Is(err, ErrRejected) {
+				t.Errorf("pin %q, subject %q: err = %v, want ErrRejected", tt.pin, tt.leaf.Subject, err)
+			}
+		})
 	}
 }
 

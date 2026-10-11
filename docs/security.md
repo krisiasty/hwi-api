@@ -97,10 +97,13 @@ discovering it later from a log line — and, for the `api.auth.enabled` column 
 `api.auth.mtls.allowed_subjects` accepts two different pin shapes, matched differently, and mixing them up silently narrows or widens access in a way
 that will not show up as an error:
 
-- **A pin containing `=`** is DN-shaped and is matched against the certificate's Subject distinguished name as a whole, or — when written as
-  `CN=<value>` — against the Subject common name specifically. **A Subject Alternative Name never satisfies a DN-shaped pin, even for the same
-  certificate.** Example: `allowed_subjects: ["CN=inventory-client.example.internal"]` matches only a certificate whose Subject CN is exactly that string; a
-  certificate whose SAN lists that same DNS name but has a different CN is refused.
+- **A pin containing `=`** is DN-shaped and is matched against the certificate's Subject distinguished name as a whole, or — when it names a single CN
+  and nothing else (`CN=<value>`) — against the Subject common name specifically. **A Subject Alternative Name never satisfies a DN-shaped pin, even for
+  the same certificate.** Example: `allowed_subjects: ["CN=inventory-client.example.internal"]` matches only a certificate whose Subject CN is exactly
+  that string; a certificate whose SAN lists that same DNS name but has a different CN is refused.
+  - **A full-DN pin** — one with further attributes, such as `CN=inventory-client,O=Trusted` — must match the whole Subject DN as rendered in RFC 4514
+    form, and never falls back to the common name. A certificate whose CN is literally `inventory-client,O=Trusted` is refused. To pin a CN that itself
+    contains `,`, `+` or `;`, escape the character as RFC 4514 does (`CN=inventory-client\,O=Trusted` or `CN=inventory-client\2CO=Trusted`).
 - **A bare pin with no `=`** matches the Subject common name (exact match) or any DNS Subject Alternative Name (case-insensitive). Example:
   `allowed_subjects: ["inventory-client.example.internal"]` matches a certificate whose CN *or* whose SAN list contains that name.
 
