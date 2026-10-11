@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "subsystem_disabled",
+    "message": "subsystem is disabled in configuration"
+  }
+}
+

@@ -1,0 +1,361 @@
+name: CI
+
+# push is main-only on purpose. With both triggers open to every branch, a
+# push to a branch that already has a pull request would run the whole
+# workflow twice on the same commit. A branch gets its coverage from the
+# pull_request trigger; main gets it from push.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: ["**"]
+
+permissions:
+  contents: read
+
+# Superseded runs on a branch are cancelled; main is never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# Every external action is pinned to a full commit SHA rather than a tag,
+# because a tag is movable: whoever can push one can change what runs here,
+# and this workflow's sibling (release.yml) holds the token that publishes
+# releases. The trailing comment is the release that SHA is.
+jobs:
+  test:
+    name: Build, vet, test, lint and scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # go-version-file reads the "go" directive straight out of go.mod, so
+      # there is only ever one place the Go version is pinned.
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # This project keeps its direct third-party modules to a minimum: a
+      # dependency added without updating go.mod/go.sum, or a go.sum that
+      # does not match what is vendored in, would slip past everything below
+      # it.
+      - name: go mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: go mod verify
+        run: go mod verify
+
+      # packaging/*.sh are maintainer scriptlets and a smoke test that all
+      # run as root during package installation, so they are worth linting.
+      # shellcheck is pinned, not taken from the runner image, which ships
+      # whatever its Ubuntu release packages (0.9.0 on 24.04) and so
+      # disagreed with a current local shellcheck. The release publishes no
+      # checksum file; the SHA-256 below is the digest GitHub records for
+      # the release asset, checked against a download. Bump the version and
+      # digest together, with the version maintainers run locally.
+      - name: Install shellcheck
+        env:
+          SHELLCHECK_VERSION: v0.11.0
+          SHELLCHECK_SHA256: b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
+        run: |
+          archive="shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/${archive}"
+          echo "${SHELLCHECK_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-${SHELLCHECK_VERSION}" >> "$GITHUB_PATH"
+
+      - name: shellcheck
+        run: |
+          shellcheck --version
+          shellcheck packaging/*.sh
+
+      # actionlint validates workflow and expression syntax and lints every
+      # embedded run: script with shellcheck, catching a defect in this file
+      # before it reaches a run.
+      - name: actionlint
+        uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2.2.0
+
+      # This project has house Markdown rules: prose hard-wrapped
+      # at 200 characters rather than markdownlint's 80-character default,
+      # sentence-case headers, and no hard-wrapping inside table cells.
+      - name: markdownlint
+        uses: DavidAnson/markdownlint-cli2-action@21c1be1b93ad9ed58fa840aacc3f279cde2a72ff # v24.2.0
+        with:
+          globs: |
+            README.md
+            docs/*.md
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./... -race -coverprofile=coverage.out
+
+      - name: Lint (golangci-lint)
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.14.0
+          args: -v
+
+      # Pinning the scanner does not stale what it finds: the vulnerability
+      # database is fetched from vuln.go.dev at run time, so a bump improves
+      # the analysis, never the data.
+      - name: Vulnerability scan (govulncheck)
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  package:
+    name: Build and smoke-test the packages
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          install-only: true
+          version: "~> v2"
+
+      # Snapshot mode needs no tag and never publishes; it produces the
+      # same archives, checksums, .deb and .rpm the release workflow would,
+      # under dist/, so this job smoke-tests exactly what a release ships.
+      - name: Build snapshot packages
+        run: goreleaser release --snapshot --clean --skip=publish
+
+      - name: Locate built packages
+        id: pkgs
+        run: |
+          set -eu
+          deb=$(ls dist/*_linux_amd64.deb)
+          rpm=$(ls dist/*_linux_amd64.rpm)
+          echo "deb=$deb" >>"$GITHUB_OUTPUT"
+          echo "rpm=$rpm" >>"$GITHUB_OUTPUT"
+
+      # --- .deb, under systemd, in an ubuntu:24.04 container -------------
+      #
+      # ubuntu-latest's own VM already runs systemd, but a plain
+      # `container:` job (or a bare `docker run ubuntu:24.04 ...`) does
+      # not: the stock image has no init system at all, and the `container:`
+      # job directive replaces PID 1 with the Actions runner hook rather
+      # than systemd. So this starts systemd as PID 1 by hand: a
+      # privileged container with the host's cgroup filesystem bind-mounted
+      # in, whose entrypoint installs systemd itself (the base image ships
+      # without it) and then execs into /sbin/init, replacing that
+      # installer shell as PID 1. Only once that manager answers over
+      # D-Bus does packaging/smoke_test.sh run, executed with `sh` rather
+      # than relying on the executable bit surviving the read-only bind
+      # mount.
+      #
+      # `-e container=` clears the value Docker sets for PID 1 (container=
+      # docker) before systemd ever reads it. With that value in place, systemd silently
+      # does not populate LoadCredential='s per-unit directory under
+      # /run/credentials/<unit> - not an error, just an empty directory
+      # (or, on Ubuntu, no directory at all) and $CREDENTIALS_DIRECTORY
+      # still exported, so the agent's own "credential not present" error
+      # is the only sign anything is wrong. A minimal unit with nothing but
+      # LoadCredential= and no other hardening reproduced the same failure,
+      # ruling out an interaction with this unit's own sandboxing.
+      # Confirmed on systemd 255 (this image) and systemd 252
+      # (rockylinux:9, below): clearing container= (systemd then reports
+      # systemd-detect-virt as container-other rather than docker) makes
+      # LoadCredential work exactly as it does on a real host. This is a
+      # property of running systemd nested in Docker, not of the shipped
+      # unit or of this smoke test's use of the credential mechanism, so
+      # the fix belongs here, in the test's container bootstrap.
+      # The packages the smoke test needs, systemd included, are installed
+      # into an image in a step of their own, before any container boots.
+      # Were the container's own entrypoint to install them instead, a slow
+      # package mirror could use up the bounded wait for boot below, and the
+      # job would fail with "systemctl: executable file not found" before
+      # systemd had even been installed. Here a slow mirror only makes this step
+      # take longer, and a broken one fails it by name. The package lists
+      # apt-get update fetched are deliberately kept in the image, not
+      # cleaned up as an image build usually would: smoke_test.sh installs
+      # the built .deb with apt-get, which would resolve any dependency the
+      # package gains from those lists, and without them would report it
+      # "not installable". The .deb has none today.
+      #
+      # Both images are built with buildx through the GitHub Actions cache:
+      # while packaging/smoke/*.Dockerfile, the base image and the day stay
+      # the same, a build is a cache restore, not a fresh package install.
+      # The date is passed to the Dockerfiles as REFRESH so that their
+      # package layer, and the package lists kept in it, are rebuilt once a
+      # day; each Dockerfile says why its lists must stay current.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Date for the smoke images' daily package refresh
+        id: refresh
+        run: echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: Build the .deb smoke-test image (ubuntu:24.04, systemd)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: packaging/smoke
+          file: packaging/smoke/ubuntu-24.04.Dockerfile
+          tags: deb-smoke-image
+          load: true
+          build-args: REFRESH=${{ steps.refresh.outputs.date }}
+          cache-from: type=gha,scope=deb-smoke
+          cache-to: type=gha,mode=max,scope=deb-smoke
+
+      - name: Smoke-test the .deb (ubuntu:24.04, systemd)
+        run: |
+          set -eu
+          docker run -d --name deb-smoke \
+            --privileged --cgroupns=host \
+            --tmpfs /run --tmpfs /run/lock \
+            -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+            -v "$PWD":/workspace:ro \
+            -e container= \
+            deb-smoke-image \
+            /sbin/init
+
+          # systemctl list-units only proves the manager will answer over
+          # D-Bus, which happens early in boot - well before
+          # systemd-tmpfiles-setup.service has run. That unit wipes /tmp, so
+          # waiting merely for D-Bus let smoke_test.sh create its WORKDIR
+          # under /tmp and then lose it to that later cleanup: a
+          # timing-dependent race, not a deterministic failure (see the
+          # comment on smoke_test.sh's WORKDIR for the other half of the
+          # fix). Polling `is-system-running` instead waits for boot to
+          # actually finish. It is a poll rather than a single
+          # `is-system-running --wait` so that a failed `docker exec` in the
+          # first instants of boot, and an intermediate state such as
+          # "initializing" or "starting", are all treated the same way: not
+          # ready yet, try again. The packages are already in the image, so
+          # this waits for boot alone.
+          # "degraded" is expected and accepted once boot does finish - some
+          # units (e.g. anything wanting real network) never start in this
+          # container - but anything else (e.g. "maintenance") means boot
+          # did not complete cleanly. The bound (90 attempts, 2s apart) is
+          # generous for boot, so a container that never finishes fails
+          # this step instead of hanging until the job-level limit.
+          echo "waiting for the container to finish booting..."
+          STATE=""
+          for _ in $(seq 1 90); do
+            STATE=$(docker exec deb-smoke systemctl is-system-running 2>/dev/null || true)
+            case "$STATE" in
+            running | degraded) break ;;
+            esac
+            sleep 2
+          done
+          case "$STATE" in
+          running | degraded) ;;
+          *)
+            echo "system did not reach a usable state (got: '$STATE', want 'running' or 'degraded')" >&2
+            docker logs deb-smoke
+            exit 1
+            ;;
+          esac
+          echo "system reached '$STATE'"
+
+          docker exec deb-smoke sh "/workspace/packaging/smoke_test.sh" "/workspace/${{ steps.pkgs.outputs.deb }}"
+
+      - name: Collect .deb container diagnostics
+        if: failure()
+        run: |
+          docker exec deb-smoke journalctl -u hwi-api --no-pager 2>&1 || true
+          docker logs deb-smoke 2>&1 || true
+
+      - name: Tear down the .deb container
+        if: always()
+        run: docker rm -f deb-smoke >/dev/null 2>&1 || true
+
+      # --- .rpm, under systemd, in a rockylinux:9 container ---------------
+      #
+      # Same reasoning as the .deb job above, `-e container=` included -
+      # confirmed locally on this image's systemd 252, not just Ubuntu's
+      # 255, so this is a systemd behaviour, not a distro quirk.
+      #
+      # `curl` is deliberately left out of the dnf install list: this base
+      # image already carries `curl-minimal`, and asking dnf to also
+      # install the full `curl` package fails outright ("conflicts with
+      # curl provided by curl-minimal") rather than being a harmless
+      # no-op. curl-minimal still has everything
+      # packaging/smoke_test.sh uses (HTTPS, IPv6 with -6, --cacert); it
+      # only leaves out protocols this script never touches.
+      # Installed into an image first, for the same reason as the .deb
+      # image above, where a slow Rocky mirror only slows the build. The
+      # dnf metadata is kept too, so that smoke_test.sh's dnf install of
+      # the built .rpm would resolve any dependency it gains without
+      # fetching the repository metadata all over again.
+      - name: Build the .rpm smoke-test image (rockylinux:9, systemd)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: packaging/smoke
+          file: packaging/smoke/rockylinux-9.Dockerfile
+          tags: rpm-smoke-image
+          load: true
+          build-args: REFRESH=${{ steps.refresh.outputs.date }}
+          cache-from: type=gha,scope=rpm-smoke
+          cache-to: type=gha,mode=max,scope=rpm-smoke
+
+      - name: Smoke-test the .rpm (rockylinux:9, systemd)
+        run: |
+          set -eu
+          docker run -d --name rpm-smoke \
+            --privileged --cgroupns=host \
+            --tmpfs /run --tmpfs /run/lock \
+            -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+            -v "$PWD":/workspace:ro \
+            -e container= \
+            rpm-smoke-image \
+            /usr/sbin/init
+
+          # Same reasoning as the .deb job above: poll for boot to finish,
+          # rather than merely for the manager to answer over D-Bus, and
+          # rather than a single `is-system-running --wait`. Accept
+          # "degraded" alongside "running", and bound the poll (90 attempts,
+          # 2s apart) so a container stuck mid-boot fails this step rather
+          # than the whole job.
+          echo "waiting for the container to finish booting..."
+          STATE=""
+          for _ in $(seq 1 90); do
+            STATE=$(docker exec rpm-smoke systemctl is-system-running 2>/dev/null || true)
+            case "$STATE" in
+            running | degraded) break ;;
+            esac
+            sleep 2
+          done
+          case "$STATE" in
+          running | degraded) ;;
+          *)
+            echo "system did not reach a usable state (got: '$STATE', want 'running' or 'degraded')" >&2
+            docker logs rpm-smoke
+            exit 1
+            ;;
+          esac
+          echo "system reached '$STATE'"
+
+          docker exec rpm-smoke sh "/workspace/packaging/smoke_test.sh" "/workspace/${{ steps.pkgs.outputs.rpm }}"
+
+      - name: Collect .rpm container diagnostics
+        if: failure()
+        run: |
+          docker exec rpm-smoke journalctl -u hwi-api --no-pager 2>&1 || true
+          docker logs rpm-smoke 2>&1 || true
+
+      - name: Tear down the .rpm container
+        if: always()
+        run: docker rm -f rpm-smoke >/dev/null 2>&1 || true

@@ -1,0 +1,62 @@
+version: 2
+project_name: hwi-api
+
+builds:
+  - id: hwi-api
+    main: .
+    binary: hwi-api
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X github.com/krisiasty/hwi-api/internal/buildinfo.version={{.Version}}
+      - -X github.com/krisiasty/hwi-api/internal/buildinfo.commit={{.FullCommit}}
+      - -X github.com/krisiasty/hwi-api/internal/buildinfo.date={{.Date}}
+
+archives:
+  - id: hwi-api
+    ids: [hwi-api]
+    formats: [tar.gz]
+    # The PCI ID database bundled into the binary is BSD-licensed, so its
+    # notice ships with it.
+    files: [LICENSE, THIRD_PARTY_NOTICES.md, README.md, packaging/config.yaml, packaging/hwi-api.service, packaging/hwi-api-helper.socket, packaging/hwi-api-helper@.service]
+
+checksum:
+  name_template: checksums.txt
+
+nfpms:
+  - id: packages
+    ids: [hwi-api]
+    package_name: hwi-api
+    formats: [deb, rpm]
+    maintainer: Krzysztof Cieplucha <krisiasty@gmail.com>
+    description: Host inventory REST API that serves a Linux host's hardware and OS inventory read-only.
+    license: Apache-2.0
+    bindir: /usr/bin
+    # No package dependencies: the agent names PCI devices from the PCI ID
+    # database built into it, not the host's pci.ids or hwdata.
+    dependencies: []
+    contents:
+      # The 3-clause BSD License of the bundled PCI ID database requires
+      # its notice to ship with the binary.
+      - src: THIRD_PARTY_NOTICES.md
+        dst: /usr/share/doc/hwi-api/THIRD_PARTY_NOTICES.md
+      - src: packaging/hwi-api.service
+        dst: /usr/lib/systemd/system/hwi-api.service
+      - src: packaging/hwi-api-helper.socket
+        dst: /usr/lib/systemd/system/hwi-api-helper.socket
+      - src: packaging/hwi-api-helper@.service
+        dst: /usr/lib/systemd/system/hwi-api-helper@.service
+      - src: packaging/config.yaml
+        dst: /etc/hwi-api/config.yaml
+        type: "config|noreplace"
+        file_info:
+          mode: 0640
+          owner: root
+          group: hwi-api
+    scripts:
+      preinstall: packaging/preinstall.sh
+      postinstall: packaging/postinstall.sh
+      preremove: packaging/preremove.sh
+      postremove: packaging/postremove.sh

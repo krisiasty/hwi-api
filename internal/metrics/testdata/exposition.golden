@@ -1,0 +1,156 @@
+# HELP hwi_api_build_info Build information about the running binary, always 1.
+# TYPE hwi_api_build_info gauge
+hwi_api_build_info{commit="abc\\d",goversion="go1.27.1",version="1.2\"3"} 1
+# HELP hwi_api_http_request_duration_seconds HTTP request latency in seconds, by listener, endpoint and method.
+# TYPE hwi_api_http_request_duration_seconds histogram
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="GET",le="0.001"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="GET",le="0.005"} 3
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="GET",le="0.01"} 3
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="GET",le="0.025"} 3
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="GET",le="0.05"} 3
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="GET",le="0.1"} 3
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="GET",le="0.25"} 3
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="GET",le="0.5"} 3
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="GET",le="1"} 4
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="GET",le="2.5"} 4
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="GET",le="5"} 4
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="GET",le="10"} 4
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="GET",le="+Inf"} 6
+hwi_api_http_request_duration_seconds_sum{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="GET"} 57.704
+hwi_api_http_request_duration_seconds_count{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="GET"} 6
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="HEAD",le="0.001"} 1
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="HEAD",le="0.005"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="HEAD",le="0.01"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="HEAD",le="0.025"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="HEAD",le="0.05"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="HEAD",le="0.1"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="HEAD",le="0.25"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="HEAD",le="0.5"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="HEAD",le="1"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="HEAD",le="2.5"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="HEAD",le="5"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="HEAD",le="10"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="HEAD",le="+Inf"} 3
+hwi_api_http_request_duration_seconds_sum{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="HEAD"} 45.003
+hwi_api_http_request_duration_seconds_count{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="HEAD"} 3
+hwi_api_http_request_duration_seconds_bucket{endpoint="/metrics",listener="ops",method="GET",le="0.001"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="/metrics",listener="ops",method="GET",le="0.005"} 3
+hwi_api_http_request_duration_seconds_bucket{endpoint="/metrics",listener="ops",method="GET",le="0.01"} 3
+hwi_api_http_request_duration_seconds_bucket{endpoint="/metrics",listener="ops",method="GET",le="0.025"} 3
+hwi_api_http_request_duration_seconds_bucket{endpoint="/metrics",listener="ops",method="GET",le="0.05"} 3
+hwi_api_http_request_duration_seconds_bucket{endpoint="/metrics",listener="ops",method="GET",le="0.1"} 3
+hwi_api_http_request_duration_seconds_bucket{endpoint="/metrics",listener="ops",method="GET",le="0.25"} 3
+hwi_api_http_request_duration_seconds_bucket{endpoint="/metrics",listener="ops",method="GET",le="0.5"} 4
+hwi_api_http_request_duration_seconds_bucket{endpoint="/metrics",listener="ops",method="GET",le="1"} 4
+hwi_api_http_request_duration_seconds_bucket{endpoint="/metrics",listener="ops",method="GET",le="2.5"} 4
+hwi_api_http_request_duration_seconds_bucket{endpoint="/metrics",listener="ops",method="GET",le="5"} 4
+hwi_api_http_request_duration_seconds_bucket{endpoint="/metrics",listener="ops",method="GET",le="10"} 5
+hwi_api_http_request_duration_seconds_bucket{endpoint="/metrics",listener="ops",method="GET",le="+Inf"} 6
+hwi_api_http_request_duration_seconds_sum{endpoint="/metrics",listener="ops",method="GET"} 28.852
+hwi_api_http_request_duration_seconds_count{endpoint="/metrics",listener="ops",method="GET"} 6
+hwi_api_http_request_duration_seconds_bucket{endpoint="line\nbreak",listener="api",method="GET",le="0.001"} 1
+hwi_api_http_request_duration_seconds_bucket{endpoint="line\nbreak",listener="api",method="GET",le="0.005"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="line\nbreak",listener="api",method="GET",le="0.01"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="line\nbreak",listener="api",method="GET",le="0.025"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="line\nbreak",listener="api",method="GET",le="0.05"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="line\nbreak",listener="api",method="GET",le="0.1"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="line\nbreak",listener="api",method="GET",le="0.25"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="line\nbreak",listener="api",method="GET",le="0.5"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="line\nbreak",listener="api",method="GET",le="1"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="line\nbreak",listener="api",method="GET",le="2.5"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="line\nbreak",listener="api",method="GET",le="5"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="line\nbreak",listener="api",method="GET",le="10"} 2
+hwi_api_http_request_duration_seconds_bucket{endpoint="line\nbreak",listener="api",method="GET",le="+Inf"} 3
+hwi_api_http_request_duration_seconds_sum{endpoint="line\nbreak",listener="api",method="GET"} 45.003
+hwi_api_http_request_duration_seconds_count{endpoint="line\nbreak",listener="api",method="GET"} 3
+# HELP hwi_api_http_request_last_duration_seconds Duration in seconds of the most recently completed HTTP request, by listener, endpoint and method.
+# TYPE hwi_api_http_request_last_duration_seconds gauge
+hwi_api_http_request_last_duration_seconds{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="GET"} 12
+hwi_api_http_request_last_duration_seconds{endpoint="/api/v1/inventory/{subsystem}",listener="api",method="HEAD"} 45
+hwi_api_http_request_last_duration_seconds{endpoint="/metrics",listener="ops",method="GET"} 6
+hwi_api_http_request_last_duration_seconds{endpoint="line\nbreak",listener="api",method="GET"} 45
+# HELP hwi_api_http_requests_total HTTP requests served, by listener, endpoint, method and status code.
+# TYPE hwi_api_http_requests_total counter
+hwi_api_http_requests_total{code="200",endpoint="/api/v1/inventory/{subsystem}",listener="api",method="GET"} 6
+hwi_api_http_requests_total{code="200",endpoint="/metrics",listener="ops",method="GET"} 6
+hwi_api_http_requests_total{code="304",endpoint="/api/v1/inventory/{subsystem}",listener="api",method="HEAD"} 3
+hwi_api_http_requests_total{code="404",endpoint="line\nbreak",listener="api",method="GET"} 3
+# HELP hwi_api_probe_duration_seconds Subsystem probe duration in seconds.
+# TYPE hwi_api_probe_duration_seconds histogram
+hwi_api_probe_duration_seconds_bucket{subsystem="bios",le="0.001"} 2
+hwi_api_probe_duration_seconds_bucket{subsystem="bios",le="0.005"} 3
+hwi_api_probe_duration_seconds_bucket{subsystem="bios",le="0.01"} 3
+hwi_api_probe_duration_seconds_bucket{subsystem="bios",le="0.025"} 3
+hwi_api_probe_duration_seconds_bucket{subsystem="bios",le="0.05"} 3
+hwi_api_probe_duration_seconds_bucket{subsystem="bios",le="0.1"} 3
+hwi_api_probe_duration_seconds_bucket{subsystem="bios",le="0.25"} 3
+hwi_api_probe_duration_seconds_bucket{subsystem="bios",le="0.5"} 3
+hwi_api_probe_duration_seconds_bucket{subsystem="bios",le="1"} 4
+hwi_api_probe_duration_seconds_bucket{subsystem="bios",le="2.5"} 4
+hwi_api_probe_duration_seconds_bucket{subsystem="bios",le="5"} 4
+hwi_api_probe_duration_seconds_bucket{subsystem="bios",le="10"} 4
+hwi_api_probe_duration_seconds_bucket{subsystem="bios",le="30"} 5
+hwi_api_probe_duration_seconds_bucket{subsystem="bios",le="+Inf"} 6
+hwi_api_probe_duration_seconds_sum{subsystem="bios"} 57.704
+hwi_api_probe_duration_seconds_count{subsystem="bios"} 6
+hwi_api_probe_duration_seconds_bucket{subsystem="cpu",le="0.001"} 1
+hwi_api_probe_duration_seconds_bucket{subsystem="cpu",le="0.005"} 2
+hwi_api_probe_duration_seconds_bucket{subsystem="cpu",le="0.01"} 3
+hwi_api_probe_duration_seconds_bucket{subsystem="cpu",le="0.025"} 3
+hwi_api_probe_duration_seconds_bucket{subsystem="cpu",le="0.05"} 3
+hwi_api_probe_duration_seconds_bucket{subsystem="cpu",le="0.1"} 3
+hwi_api_probe_duration_seconds_bucket{subsystem="cpu",le="0.25"} 3
+hwi_api_probe_duration_seconds_bucket{subsystem="cpu",le="0.5"} 3
+hwi_api_probe_duration_seconds_bucket{subsystem="cpu",le="1"} 3
+hwi_api_probe_duration_seconds_bucket{subsystem="cpu",le="2.5"} 4
+hwi_api_probe_duration_seconds_bucket{subsystem="cpu",le="5"} 4
+hwi_api_probe_duration_seconds_bucket{subsystem="cpu",le="10"} 4
+hwi_api_probe_duration_seconds_bucket{subsystem="cpu",le="30"} 4
+hwi_api_probe_duration_seconds_bucket{subsystem="cpu",le="+Inf"} 6
+hwi_api_probe_duration_seconds_sum{subsystem="cpu"} 173.112
+hwi_api_probe_duration_seconds_count{subsystem="cpu"} 6
+hwi_api_probe_duration_seconds_bucket{subsystem="pci",le="0.001"} 2
+hwi_api_probe_duration_seconds_bucket{subsystem="pci",le="0.005"} 3
+hwi_api_probe_duration_seconds_bucket{subsystem="pci",le="0.01"} 3
+hwi_api_probe_duration_seconds_bucket{subsystem="pci",le="0.025"} 3
+hwi_api_probe_duration_seconds_bucket{subsystem="pci",le="0.05"} 3
+hwi_api_probe_duration_seconds_bucket{subsystem="pci",le="0.1"} 3
+hwi_api_probe_duration_seconds_bucket{subsystem="pci",le="0.25"} 3
+hwi_api_probe_duration_seconds_bucket{subsystem="pci",le="0.5"} 3
+hwi_api_probe_duration_seconds_bucket{subsystem="pci",le="1"} 4
+hwi_api_probe_duration_seconds_bucket{subsystem="pci",le="2.5"} 4
+hwi_api_probe_duration_seconds_bucket{subsystem="pci",le="5"} 4
+hwi_api_probe_duration_seconds_bucket{subsystem="pci",le="10"} 4
+hwi_api_probe_duration_seconds_bucket{subsystem="pci",le="30"} 5
+hwi_api_probe_duration_seconds_bucket{subsystem="pci",le="+Inf"} 6
+hwi_api_probe_duration_seconds_sum{subsystem="pci"} 57.704
+hwi_api_probe_duration_seconds_count{subsystem="pci"} 6
+# HELP hwi_api_probe_errors_total Subsystem probe failures.
+# TYPE hwi_api_probe_errors_total counter
+hwi_api_probe_errors_total{subsystem="cpu"} 6
+# HELP hwi_api_probe_last_duration_seconds Duration in seconds of the most recently completed subsystem probe, including failed probes.
+# TYPE hwi_api_probe_last_duration_seconds gauge
+hwi_api_probe_last_duration_seconds{subsystem="bios"} 12
+hwi_api_probe_last_duration_seconds{subsystem="cpu"} 36
+hwi_api_probe_last_duration_seconds{subsystem="pci"} 12
+# HELP hwi_api_ready Whether the agent has completed its first refresh cycle.
+# TYPE hwi_api_ready gauge
+hwi_api_ready 1
+# HELP hwi_api_refreshes_total Subsystem refresh attempts, by outcome.
+# TYPE hwi_api_refreshes_total counter
+hwi_api_refreshes_total{result="error",subsystem="cpu"} 6
+hwi_api_refreshes_total{result="success",subsystem="bios"} 6
+hwi_api_refreshes_total{result="success",subsystem="pci"} 6
+# HELP hwi_api_request_rejections_total Requests rejected before reaching a handler, by listener and reason.
+# TYPE hwi_api_request_rejections_total counter
+hwi_api_request_rejections_total{listener="api",reason="forbidden"} 2
+hwi_api_request_rejections_total{listener="api",reason="unauthorized"} 1
+hwi_api_request_rejections_total{listener="ops",reason="busy"} 1
+# HELP hwi_api_data_age_seconds Age in seconds of each subsystem's most recently collected data.
+# TYPE hwi_api_data_age_seconds gauge
+hwi_api_data_age_seconds{subsystem="bios"} 1.5
+hwi_api_data_age_seconds{subsystem="pci"} 90
+# HELP hwi_api_probe_last_success_timestamp_seconds Unix timestamp of each subsystem's last successful probe.
+# TYPE hwi_api_probe_last_success_timestamp_seconds gauge
+hwi_api_probe_last_success_timestamp_seconds{subsystem="bios"} 1.790337598e+09
+hwi_api_probe_last_success_timestamp_seconds{subsystem="pci"} 1.79033751e+09

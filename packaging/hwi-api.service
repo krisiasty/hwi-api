@@ -1,0 +1,108 @@
+[Unit]
+Description=hwi-api host inventory REST API
+Documentation=https://github.com/krisiasty/hwi-api
+After=network-online.target hwi-api-helper.socket
+Wants=network-online.target hwi-api-helper.socket
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/hwi-api --config /etc/hwi-api/config.yaml
+Restart=on-failure
+RestartSec=5s
+User=hwi-api
+Group=hwi-api
+
+# The daemon holds no capabilities at all. What it cannot read as the
+# hwi-api user -- the root-only DMI identity fields, the SMBIOS table and
+# PCI Vital Product Data -- it asks the privileged helper for, over this
+# socket: hwi-api-helper.socket starts one confined
+# hwi-api-helper@.service instance per connection, which answers a fixed
+# set of requests and nothing else (docs/security.md). Without the helper
+# the daemon still runs, with those fields degraded as documented there.
+Environment=HWI_API_HELPER_SOCKET=/run/hwi-api-helper.sock
+AmbientCapabilities=
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+
+# Every file in /etc/hwi-api/tls is loaded as a credential named
+# tls_<file name>: cert.pem becomes credential:tls_cert.pem, key.pem
+# credential:tls_key.pem. The package creates the directory, empty, so the
+# unit starts before any certificate is installed, as it must with
+# api.tls.enabled: false. Do not remove the directory: systemd refuses to
+# start a unit whose LoadCredential= source does not exist.
+LoadCredential=tls:/etc/hwi-api/tls
+
+# Hardening that costs no data: everything below blocks a write, or hides
+# something no collector reads. None of it hides /sys, /proc/cpuinfo,
+# /proc/meminfo, /proc/stat or udev's database, and none blocks the
+# netlink socket the network collectors use. packaging/smoke_test.sh
+# compares every subsystem's payload with and without the sandbox
+# directives its assertion 12 checks, and fails on any difference.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# No collector opens anything under /dev: block reads /sys/block, udev's
+# database and the mount table. Also closes the device cgroup and drops
+# @raw-io.
+PrivateDevices=yes
+# No SysV IPC or POSIX message queues are used.
+PrivateIPC=yes
+RemoveIPC=yes
+# The daemon creates no files; any it ever does should be private.
+UMask=0077
+# On top of @system-service. EPERM applies to every call the filter
+# refuses, deliberately: a blocked call returns an error the code can
+# handle instead of killing the daemon mid-refresh. The Go runtime raises
+# RLIMIT_NOFILE at start through prlimit64, which is in @default, not
+# @resources, so the filter allows it (the smoke test logs this). Nothing
+# in either set is called.
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+# The daemon executes no program but itself.
+NoExecPaths=/
+ExecPaths=/usr/bin/hwi-api
+
+# AF_NETLINK is required: net.Interfaces uses it, and without it
+# interface-name binding fails.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+# Deliberately NOT set:
+#   ProcSubset=pid         hides /proc/cpuinfo, /proc/meminfo and
+#                          /proc/stat, which cpu, memory, topology and os read
+#   ProtectProc=invisible  hides /proc/1/mountinfo, the host's mount table,
+#                          which block reads for mount points; the daemon's
+#                          own differs: ProtectHome= unmounts a separate
+#                          /home in it, and ExecPaths= adds a self-bind of
+#                          /usr/bin/hwi-api on the root device
+#   PrivateUsers=yes       needs user namespaces: where they are disabled
+#                          (user.max_user_namespaces=0, as the RHEL 8 STIG
+#                          and some CIS profiles set), systemd refuses to
+#                          start the unit, status=217/USER; the gain is
+#                          small for a daemon with no capabilities whose
+#                          inputs are world- or group-readable
+#   RestrictFileSystems=   an allow list would have to name every file
+#                          system an operator may use for /, /etc and /usr
+#                          (xfs, ext4, btrfs, zfs, an NFS root), and would
+#                          break only on hosts with the BPF LSM enabled,
+#                          which CI cannot reproduce
+#   PrivateNetwork=yes,    the daemon serves the API on the network
+#   IPAddressDeny=
+#   DynamicUser=yes        the package creates a fixed hwi-api user, which
+#                          the helper socket's group and the config's
+#                          ownership rely on
+
+[Install]
+WantedBy=multi-user.target

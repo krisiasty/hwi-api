@@ -1,0 +1,87 @@
+name: Update pci.ids
+
+# Every Monday, fetch the PCI ID Project's current pci.ids and, when it
+# differs from the copy bundled in internal/pciids, propose it in a pull
+# request from chore/update-pci-ids. The agent names PCI devices from the
+# bundled copy, never the host's.
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+# contents to push the branch, pull-requests to open the pull request. The
+# repository must also allow GitHub Actions to create pull requests
+# (Settings > Actions > General > Workflow permissions).
+permissions:
+  contents: write
+  pull-requests: write
+
+# Every external action is pinned to a full commit SHA rather than a tag,
+# as in ci.yml and release.yml. The trailing comment is the release that
+# SHA is.
+jobs:
+  update:
+    name: Propose a fresh pci.ids
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # gzip -9 -n stores no name or time, so the bundled file changes only
+      # when its contents do, and an unchanged pci.ids opens no pull request.
+      - name: Fetch pci.ids
+        id: fetch
+        run: |
+          curl -fsSL --retry 3 --max-time 120 -o "$RUNNER_TEMP/pci.ids" https://pci-ids.ucw.cz/v2.2/pci.ids
+          version=$(sed -n 's/^#[[:space:]]*Version:[[:space:]]*//p' "$RUNNER_TEMP/pci.ids" | head -n 1)
+          if [ -z "$version" ]; then
+            echo "::error::the fetched pci.ids has no Version line"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gzip -dc internal/pciids/pci.ids.gz | cmp -s - "$RUNNER_TEMP/pci.ids"; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "The bundled pci.ids is current: $version"
+          else
+            gzip -9 -n -c "$RUNNER_TEMP/pci.ids" > internal/pciids/pci.ids.gz
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The parser refuses a malformed or truncated database, and its tests
+      # check the new copy still names the devices they expect. A pull
+      # request opened with this workflow's token does not start CI by
+      # itself, so this is the check the copy gets before review.
+      - name: Test the new copy
+        if: steps.fetch.outputs.changed == 'true'
+        run: go test ./internal/pciids/... ./internal/inventory/...
+
+      - name: Open or update the pull request
+        if: steps.fetch.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.fetch.outputs.version }}
+        run: |
+          branch=chore/update-pci-ids
+          title="chore(pciids): update pci.ids to $VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add internal/pciids/pci.ids.gz
+          git commit -m "$title"
+          git push --force origin "$branch"
+          cat > "$RUNNER_TEMP/body.md" <<EOF
+          The PCI ID Project's pci.ids is now version $VERSION; this updates the copy bundled in internal/pciids, which the agent names PCI devices from.
+
+          The new copy parses completely, and the pciids and inventory tests pass with it. CI does not start by itself on a pull request opened by this workflow: close and reopen it to run CI before merging.
+          EOF
+          if [ -z "$(gh pr list --head "$branch" --state open --json number --jq '.[].number')" ]; then
+            gh pr create --base main --head "$branch" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh pr edit "$branch" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+          fi

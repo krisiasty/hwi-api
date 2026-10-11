@@ -1,0 +1,44 @@
+{
+  "schema_version": "v1",
+  "subsystem": "all",
+  "host_id": "b41d2f0c",
+  "collected_at": "2026-09-21T10:00:00Z",
+  "complete": true,
+  "disabled": [
+    "memory",
+    "topology",
+    "block",
+    "network",
+    "links",
+    "pci",
+    "slots",
+    "chassis",
+    "bios",
+    "baseboard",
+    "product",
+    "udev-block",
+    "udev-net",
+    "udev-pci",
+    "udev-nvme",
+    "udev-scsi",
+    "udev-drm",
+    "udev-vfio",
+    "virtualization"
+  ],
+  "data": {
+    "cpu": {
+      "collected_at": "2026-09-21T10:00:00Z",
+      "data": {
+        "total_cores": 8
+      }
+    },
+    "os": {
+      "collected_at": "2026-09-21T10:00:00Z",
+      "data": {
+        "distribution": {
+          "id": "ubuntu"
+        }
+      }
+    }
+  }
+}

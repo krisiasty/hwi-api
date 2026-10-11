@@ -1,0 +1,601 @@
+openapi: 3.1.0
+info:
+  title: hwi-api
+  version: "v1"
+  description: >-
+    hwi-api discovers hardware and OS inventory on a Linux host and serves it over HTTP. "v1" here is
+    apiv1.SchemaVersion, the envelope format version, not the binary's release version.
+
+
+    Every successful response is wrapped in an Envelope carrying a `complete` flag. `complete: false` means at
+    least one enabled subsystem is missing from this response body (never collected yet, or failing right now with
+    no prior good data). A consumer MUST treat such a response as partial and MUST NOT reconcile destructively
+    against it: do not delete, deprovision, or otherwise treat the absence of a subsystem in an incomplete
+    response as authoritative evidence that the subsystem does not exist on the host.
+
+
+    A subsystem disabled in the agent's own configuration is a different, non-error condition: it is listed in
+    `disabled` and does not affect `complete`. Only an *enabled* subsystem missing from a response indicates
+    incompleteness.
+servers:
+  - url: "https://{host}:{port}"
+    description: The agent's authenticated API listener.
+    variables:
+      host:
+        default: localhost
+        description: Hostname or address of the machine running hwi-api.
+      port:
+        default: "8096"
+        description: TCP port of the API listener (api.bind.port in configuration; 8096 by default).
+# This block describes the default posture only: api.tls.enabled and every api.auth mechanism default to on, but
+# each is independently optional in configuration (see docs/security.md), so a given deployment may run with TLS
+# and/or authentication deliberately disabled and therefore not actually enforce either scheme below.
+security:
+  - mtls: []
+  - bearerToken: []
+paths:
+  /api/v1/inventory:
+    get:
+      operationId: getInventorySnapshot
+      summary: Get a full snapshot of every enabled subsystem
+      description: >-
+        Returns one Envelope whose `data` is an object keyed by subsystem name, each value a SnapshotEntry. Only
+        subsystems enabled in configuration that have collected at least once appear as keys; a disabled subsystem
+        is never a key here, and is instead named in the envelope's `disabled` array. `collected_at` on the
+        envelope is the OLDEST collection time among the subsystems present, so a consumer reading only the
+        envelope-level timestamp sees the worst-case staleness. Requesting a method other than GET or HEAD on this
+        path returns 405; HEAD is served automatically wherever GET is, with the same headers and status but no
+        body.
+      parameters:
+        - $ref: "#/components/parameters/Refresh"
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          description: >-
+            A snapshot Envelope. `complete` is true only when every enabled subsystem is present in `data`; it is
+            vacuously true when no subsystem is enabled at all. A fully-disabled host still returns 200 with an
+            empty `data` object, since that is a legitimate configured steady state, not a failure.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+            Last-Modified:
+              $ref: "#/components/headers/LastModified"
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+            X-Content-Type-Options:
+              $ref: "#/components/headers/ContentTypeOptions"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnapshotEnvelope"
+        "304":
+          description: >-
+            The client's If-None-Match already names the current ETag (or is "*"). The body is empty; all the
+            headers a 200 for the same request would have carried, Content-Type included, are still sent.
+          headers:
+            Content-Type:
+              $ref: "#/components/headers/ContentType"
+            ETag:
+              $ref: "#/components/headers/ETag"
+            Last-Modified:
+              $ref: "#/components/headers/LastModified"
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+            X-Content-Type-Options:
+              $ref: "#/components/headers/ContentTypeOptions"
+        "401":
+          description: No credentials were presented at all (neither a verified client certificate nor an Authorization header).
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+            X-Content-Type-Options:
+              $ref: "#/components/headers/ContentTypeOptions"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                noCredentials:
+                  value: { error: { code: unauthorized, message: "authentication required" } }
+        "403":
+          description: >-
+            Either the peer address is not on the listener's allow list, or credentials were presented but refused
+            by both configured mechanisms. The response never says which check failed.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+            X-Content-Type-Options:
+              $ref: "#/components/headers/ContentTypeOptions"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                forbidden:
+                  value: { error: { code: forbidden, message: "forbidden" } }
+                credentialsRejected:
+                  value: { error: { code: forbidden, message: "request not authorized" } }
+        "405":
+          description: The request used a method other than GET or HEAD.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+            Allow:
+              $ref: "#/components/headers/Allow"
+            X-Content-Type-Options:
+              $ref: "#/components/headers/ContentTypeOptions"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                methodNotAllowed:
+                  value: { error: { code: method_not_allowed, message: "only GET and HEAD are supported" } }
+        "503":
+          description: >-
+            Two unrelated conditions share this status. (1) At least one enabled subsystem is expected to have
+            data and none has ever collected (the cold-start case): code `subsystem_unavailable`. (2) The server's
+            concurrency limiter is at capacity and rejected this request rather than queue it: code
+            `too_many_requests`, with a Retry-After header. That second pairing (503 with a "too many requests"
+            error code, not 429) is a deliberate, documented choice of this API, not a mistake to be corrected by a
+            client library that assumes 429.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+            Retry-After:
+              $ref: "#/components/headers/RetryAfter"
+            X-Content-Type-Options:
+              $ref: "#/components/headers/ContentTypeOptions"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notCollected:
+                  value: { error: { code: subsystem_unavailable, message: "no subsystem has been collected" } }
+                concurrencyLimit:
+                  value: { error: { code: too_many_requests, message: "too many concurrent requests" } }
+        "500":
+          description: >-
+            An unexpected server-side failure: either a panic was recovered while serving this request, or the
+            response body itself could not be JSON-encoded. Under normal operation this should not occur; it is
+            documented because the server's panic-recovery middleware and its encoding-failure branches both
+            produce it deliberately rather than crashing the process or serving a half-written response.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+            X-Content-Type-Options:
+              $ref: "#/components/headers/ContentTypeOptions"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                panicRecovered:
+                  value: { error: { code: internal, message: "internal server error" } }
+                snapshotEncodingFailed:
+                  value: { error: { code: internal, message: "encoding snapshot" } }
+                envelopeEncodingFailed:
+                  value: { error: { code: internal, message: "encoding response" } }
+  /api/v1/inventory/{subsystem}:
+    get:
+      operationId: getSubsystemInventory
+      summary: Get one subsystem's current inventory
+      description: >-
+        Returns one Envelope for a single subsystem. `subsystem` in the response echoes the path parameter, never
+        "all". Requesting a method other than GET or HEAD on this path returns 405; HEAD is served automatically
+        wherever GET is, with the same headers and status but no body.
+      parameters:
+        - $ref: "#/components/parameters/SubsystemPath"
+        - $ref: "#/components/parameters/Refresh"
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          description: >-
+            The subsystem's current Envelope. `complete` is true whenever data is present, even if the most recent
+            refresh failed: a subsystem named in `errors` while still returning 200 means last-good data is being
+            served, and `collected_at` shows how old it is.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+            Last-Modified:
+              $ref: "#/components/headers/LastModified"
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+            X-Content-Type-Options:
+              $ref: "#/components/headers/ContentTypeOptions"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "304":
+          description: >-
+            The client's If-None-Match already names the current ETag (or is "*"). The body is empty; all the
+            headers a 200 for the same request would have carried, Content-Type included, are still sent.
+          headers:
+            Content-Type:
+              $ref: "#/components/headers/ContentType"
+            ETag:
+              $ref: "#/components/headers/ETag"
+            Last-Modified:
+              $ref: "#/components/headers/LastModified"
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+            X-Content-Type-Options:
+              $ref: "#/components/headers/ContentTypeOptions"
+        "401":
+          description: No credentials were presented at all (neither a verified client certificate nor an Authorization header).
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+            X-Content-Type-Options:
+              $ref: "#/components/headers/ContentTypeOptions"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                noCredentials:
+                  value: { error: { code: unauthorized, message: "authentication required" } }
+        "403":
+          description: >-
+            Either the peer address is not on the listener's allow list, or credentials were presented but refused
+            by both configured mechanisms. The response never says which check failed.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+            X-Content-Type-Options:
+              $ref: "#/components/headers/ContentTypeOptions"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                forbidden:
+                  value: { error: { code: forbidden, message: "forbidden" } }
+                credentialsRejected:
+                  value: { error: { code: forbidden, message: "request not authorized" } }
+        "404":
+          description: >-
+            Two unrelated conditions share this status. (1) The path segment is not one of the addressable
+            subsystem names below (code `not_found`; note that "all" is always a 404 here, since the snapshot has
+            its own route). (2) The subsystem is a real, known name but is switched off in this host's
+            configuration (code `subsystem_disabled`).
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+            X-Content-Type-Options:
+              $ref: "#/components/headers/ContentTypeOptions"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unknownSubsystem:
+                  value: { error: { code: not_found, message: "unknown subsystem" } }
+                disabledSubsystem:
+                  value: { error: { code: subsystem_disabled, message: "subsystem is disabled in configuration" } }
+        "405":
+          description: The request used a method other than GET or HEAD.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+            Allow:
+              $ref: "#/components/headers/Allow"
+            X-Content-Type-Options:
+              $ref: "#/components/headers/ContentTypeOptions"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                methodNotAllowed:
+                  value: { error: { code: method_not_allowed, message: "only GET and HEAD are supported" } }
+        "503":
+          description: >-
+            Two unrelated conditions share this status. (1) This subsystem has never collected successfully at
+            all: code `subsystem_unavailable`. (2) The server's concurrency limiter is at capacity and rejected
+            this request rather than queue it: code `too_many_requests`, with a Retry-After header. That second
+            pairing (503 with a "too many requests" error code, not 429) is a deliberate, documented choice of this
+            API, not a mistake to be corrected by a client library that assumes 429.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+            Retry-After:
+              $ref: "#/components/headers/RetryAfter"
+            X-Content-Type-Options:
+              $ref: "#/components/headers/ContentTypeOptions"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                notCollected:
+                  value: { error: { code: subsystem_unavailable, message: "subsystem has not been collected" } }
+                concurrencyLimit:
+                  value: { error: { code: too_many_requests, message: "too many concurrent requests" } }
+        "500":
+          description: >-
+            An unexpected server-side failure: either a panic was recovered while serving this request, or the
+            envelope itself could not be JSON-encoded. Under normal operation this should not occur; it is
+            documented because the server's panic-recovery middleware and this handler's own encoding-failure
+            branch both produce it deliberately rather than crashing the process or serving a half-written
+            response. Unlike the full-snapshot endpoint, this handler has no separate encoding step of its own
+            before the envelope is built, so it has only this one encoding-failure branch, not two.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+            X-Content-Type-Options:
+              $ref: "#/components/headers/ContentTypeOptions"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                panicRecovered:
+                  value: { error: { code: internal, message: "internal server error" } }
+                envelopeEncodingFailed:
+                  value: { error: { code: internal, message: "encoding response" } }
+components:
+  securitySchemes:
+    mtls:
+      type: mutualTLS
+      description: >-
+        A client certificate verified against the API listener's configured client CA. Optionally narrowed to a
+        pinned set of subjects in configuration. Either this or bearerToken admits a request; a server configured
+        with both mechanisms enabled accepts a request that satisfies just one of them.
+    bearerToken:
+      type: http
+      scheme: bearer
+      description: >-
+        An opaque bearer credential in the Authorization header, checked in constant time against a configured
+        list of SHA-256 digests. Either this or mtls admits a request; a server configured with both mechanisms
+        enabled accepts a request that satisfies just one of them.
+  parameters:
+    Refresh:
+      name: refresh
+      in: query
+      required: false
+      description: >-
+        Forces a synchronous collection before the response is built, instead of serving whatever is already
+        stored. Recognised only as the exact literal string "true"; any other value, including "false", an empty
+        string, or the parameter's absence, behaves as if it were not supplied at all. On the full-snapshot path
+        this refreshes every enabled subsystem except ones disabled in configuration, which are never forced
+        regardless of this parameter, so an operator who disabled a subsystem to avoid its probe cost never has
+        that cost imposed by a snapshot refresh.
+      schema:
+        type: string
+        enum: ["true"]
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      description: >-
+        A conditional-GET validator: either the literal "*", or a comma-separated list of ETag values (as
+        returned in a prior response's ETag header). If any entry matches the resource's current ETag (after
+        trimming surrounding whitespace from each entry), the server returns 304 with an empty body instead of
+        re-sending the representation. Matching is the weak comparison RFC 9110 defines for If-None-Match: the
+        quoted digests must be identical, and a W/ prefix on either side is ignored.
+      schema:
+        type: string
+    SubsystemPath:
+      name: subsystem
+      in: path
+      required: true
+      description: >-
+        One addressable subsystem name. Matching is exact and case-sensitive. "all" is never accepted here: the
+        full snapshot is its own route, /api/v1/inventory.
+      schema:
+        $ref: "#/components/schemas/Subsystem"
+  headers:
+    ContentType:
+      description: >-
+        Always "application/json; charset=utf-8". Sent on every response, including a 304, whose empty body is the
+        only reason this header would otherwise go unnoticed: writeEnvelope sets it unconditionally before deciding
+        whether to send 200 or 304.
+      schema:
+        type: string
+        enum: ["application/json; charset=utf-8"]
+    ETag:
+      description: >-
+        A weak validator: W/ followed by a double-quoted, lowercase-hex SHA-256 digest. It covers the inventory
+        payload, the errors served with it, and the envelope's schema_version and host_id, but not
+        collected_at, so re-collecting identical hardware keeps the same ETag while a new or cleared error changes
+        it. Sent only on 200 and 304 responses.
+      schema:
+        type: string
+        example: 'W/"3fae1c9d1b3a7e9c4f7b2a6d8e5c0f1a2b3c4d5e6f708192a3b4c5d6e7f80912"'
+    LastModified:
+      description: >-
+        The collection time of the data being served, as an HTTP-date (RFC 7231 IMF-fixdate, e.g. "Sun, 06 Nov
+        1994 08:49:37 GMT"). Sent only on 200 and 304 responses, and only when that collection time is known
+        (non-zero).
+      schema:
+        type: string
+        example: "Mon, 21 Sep 2026 10:00:00 GMT"
+    CacheControl:
+      description: >-
+        Always the literal "no-store". Sent on every response, success or error: inventory is dynamic host state
+        and must never be served from a shared or private cache, only revalidated through ETag/If-None-Match.
+      schema:
+        type: string
+        enum: ["no-store"]
+    ContentTypeOptions:
+      description: Always the literal "nosniff". Sent on every response, success or error.
+      schema:
+        type: string
+        enum: ["nosniff"]
+    Allow:
+      description: >-
+        Sent only on a 405 response. Names the methods this route actually accepts; the server currently ever
+        sends exactly one value.
+      schema:
+        type: string
+        enum: ["GET, HEAD"]
+    RetryAfter:
+      description: >-
+        Seconds to wait before retrying. Sent only on the 503 produced by the concurrency limiter (error code
+        too_many_requests); never sent on the 503 produced when a subsystem simply has no data yet.
+      schema:
+        type: string
+        enum: ["1"]
+  schemas:
+    Subsystem:
+      type: string
+      description: One addressable inventory subsystem, in the agent's canonical, stable ordering.
+      enum:
+        - cpu
+        - memory
+        - topology
+        - block
+        - network
+        - links
+        - pci
+        - slots
+        - chassis
+        - bios
+        - baseboard
+        - product
+        - udev-block
+        - udev-net
+        - udev-pci
+        - udev-nvme
+        - udev-scsi
+        - udev-drm
+        - udev-vfio
+        - os
+        - virtualization
+    Error:
+      type: object
+      description: A machine-readable failure. message is deliberately generic; filesystem paths and upstream error text stay in the server's log, never here.
+      properties:
+        code:
+          type: string
+          enum:
+            - not_found
+            - subsystem_disabled
+            - subsystem_unavailable
+            - unauthorized
+            - forbidden
+            - method_not_allowed
+            - too_many_requests
+            - internal
+        message:
+          type: string
+      required: [code, message]
+    ErrorResponse:
+      type: object
+      description: The body of every non-2xx response.
+      properties:
+        error:
+          $ref: "#/components/schemas/Error"
+      required: [error]
+    SnapshotEntry:
+      type: object
+      description: One subsystem's slot inside a full snapshot's data object, keyed by subsystem name at the call site.
+      properties:
+        collected_at:
+          type: string
+          format: date-time
+          description: >-
+            This subsystem's own collection time, the moment its most recent successful probe finished. Subsystems refresh on independent schedules,
+            so each entry carries its own timestamp rather than sharing the envelope's.
+        data:
+          type: object
+          additionalProperties: true
+          description: >-
+            The subsystem's payload. Every payload (product, baseboard, chassis, bios, block, cpu, links, memory,
+            network, pci, slots, topology, udev-*, os and virtualization) is built by the agent itself;
+            docs/consumers.md describes them.
+      required: [collected_at, data]
+    Envelope:
+      type: object
+      description: Wraps every successful response.
+      properties:
+        schema_version:
+          type: string
+          description: The envelope format version. Currently always "v1".
+          example: "v1"
+        subsystem:
+          type: string
+          description: >-
+            The subsystem this envelope describes, or "all" when it is the full-snapshot response from
+            /api/v1/inventory. "all" never appears as a Subsystem path-parameter value; it labels this field only.
+        host_id:
+          type: string
+          description: >-
+            Identifies the machine: derived from its machine ID with HMAC-SHA256, hex-encoded and truncated to 128
+            bits, and stable per operating system installation. Always present; "" when no machine ID is readable.
+            Correlate responses on this field. The hostname is deliberately not in the envelope: it is a label, not
+            an identity, and the os payload reports it, updated on each os refresh. DMI serials are absent for the same reason:
+            they are frequently unset, placeholder, or duplicated across a batch of machines, so the product,
+            baseboard and chassis payloads report them as data rather than promoting them to an identity.
+          example: "b41d2f0ce7a94a1cf3d5e0a19b7c2f41"
+        collected_at:
+          type: string
+          format: date-time
+          description: >-
+            Always reported in UTC. For a single-subsystem response, that subsystem's own collection time: the
+            moment its most recent successful probe finished. A failed refresh does not move it. For the
+            full-snapshot response, the OLDEST collection time among the subsystems present, so a reader of only
+            this field sees the worst-case staleness across the snapshot.
+        complete:
+          type: boolean
+          description: >-
+            True only when every subsystem this envelope is responsible for (every enabled subsystem, for a
+            snapshot; the requested subsystem, for a single-subsystem response with data present) is actually
+            present. See the description at the top of this document for what a consumer must and must not do
+            when this is false.
+        disabled:
+          type: array
+          description: >-
+            Subsystems switched off in this host's configuration. They are intentionally absent from data and do
+            not affect complete. Populated only on the full-snapshot envelope; a single-subsystem envelope never
+            sets this field (a disabled subsystem is reached by the subsystem-specific route at all, since that
+            route 404s first).
+          items:
+            $ref: "#/components/schemas/Subsystem"
+        errors:
+          type: object
+          description: >-
+            Maps a subsystem name to its most recent collection failure. A subsystem may appear here while still
+            having data in the response, meaning last-good data is being served; collected_at shows how old it is.
+            Omitted entirely when there are no errors to report.
+          additionalProperties:
+            type: string
+        data:
+          type: object
+          additionalProperties: true
+          description: >-
+            This subsystem's payload, built by the agent itself; docs/consumers.md describes each one (product, baseboard, chassis, bios, block, cpu,
+            links, memory, network, pci, slots, topology, udev-*, os and virtualization). This is the shape /api/v1/inventory/{subsystem} returns; the
+            full-snapshot response at /api/v1/inventory returns SnapshotEnvelope instead, whose data is a map of SnapshotEntry keyed by subsystem name
+            rather than a single subsystem's payload. A payload marks a value the agent could not read with "unknown" for a string and the zero value
+            otherwise, except network, which leaves out a value the kernel does not
+            know (such as duplex, port, speed_mbps or fec.active) rather than reporting "unknown" (only an active FEC mode it cannot name is
+            "unknown"), the DMI subsystems (product, baseboard, chassis and bios), which leave out a field whose file the host does not have or whose
+            file is empty, block, which leaves out a field whose source the device does not have, such as a disk's dm_name or a device udev has no
+            entry for, and cpu, which leaves out a field /proc/cpuinfo does not report, such as microcode on arm64, and reports -1 for a package or
+            core id it cannot read. topology leaves out a node's distances when the kernel's distance file cannot be read. The os payload follows
+            the convention for all of its fields: a string whose source could not be read is "unknown", one whose source was read but leaves it
+            unset is "", and boot_time is 0001-01-01T00:00:00Z when unreadable. Other payloads may have optional fields, omitted when empty, and
+            fields that are null, such as an empty list.
+      required: [schema_version, subsystem, host_id, collected_at, complete, data]
+    SnapshotEnvelope:
+      description: >-
+        The full-snapshot response from /api/v1/inventory. Identical to Envelope except that data is a map keyed
+        by subsystem name, each value a SnapshotEntry, rather than a single subsystem's payload - the two
+        endpoints genuinely differ in what they serve here, not merely in how it is described.
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              additionalProperties:
+                $ref: "#/components/schemas/SnapshotEntry"
+              description: >-
+                An object keyed by subsystem name. Only subsystems enabled in configuration that have collected at
+                least once appear as keys; a disabled subsystem is never a key here (see the envelope's disabled
+                array instead).
+          required: [data]

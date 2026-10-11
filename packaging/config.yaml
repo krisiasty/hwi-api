@@ -1,0 +1,143 @@
+# Example configuration for hwi-api.
+#
+# Every key the agent understands is listed below, either active at its
+# built-in default or commented out where no safe default exists. The
+# decoder is strict (yaml.Decoder.KnownFields(true)): an unrecognised or
+# misspelled key is a startup error, not a silently ignored setting, and
+# so is a second, non-empty YAML document after a "---" line, whose
+# settings would otherwise never be read. An empty trailing "---" or a
+# comment-only document is accepted.
+#
+# Paths that carry secret material (api.tls.cert_file, api.tls.key_file,
+# api.auth.token.hashes_file) accept a "credential:<name>" reference in
+# place of an absolute path. That form resolves to
+# $CREDENTIALS_DIRECTORY/<name> at startup, which systemd populates from
+# the packaged unit's LoadCredential= directives. Distribution and
+# rotation of the underlying secret is left to the provisioning system
+# (e.g. Ansible); this agent only ever reads it.
+#
+# api.tls.enabled and api.auth.enabled both default to true/on -- the
+# second even when the whole api.auth block is absent, so a forgotten or
+# mistyped section still enforces authentication rather than silently
+# disabling it -- and each can be turned off independently. See
+# api.tls.enabled, api.auth.enabled and docs/security.md if you need to
+# disable one deliberately (e.g. a trusted local proxy that already
+# terminates TLS in front of this agent). Disabling either logs a loud
+# startup warning; disabling both serves hardware inventory, including
+# serial numbers and hardware UUIDs, in cleartext with no authentication
+# at all. This shipped example keeps both on: TLS is enabled and token
+# authentication is enabled, so -- exactly as before this was merely a
+# warning-worthy choice instead of a hard requirement -- the agent still
+# refuses to start until you supply a certificate/key pair and a token
+# digest below. There is no safe default for either, so both are shown
+# with the enabling flag active but the actual secret paths commented
+# out, and MUST be completed before the API listener will come up.
+
+api:
+  bind:
+    # Literal addresses and/or interface names to bind the API listener
+    # to. Both may be mixed; interface names are resolved to their
+    # current addresses at startup. An empty list (the default) binds
+    # every address.
+    addresses: []
+    interfaces: []
+    # 8096, not 8443: 8443 is the most common alternative HTTPS port.
+    port: 8096
+
+  tls:
+    # Defaults to true. REQUIRED while true: the agent will not start
+    # without both cert_file and key_file below. Set to false only when
+    # a trusted local proxy already terminates TLS in front of this
+    # agent -- see the "independently optional" table in
+    # docs/security.md before doing so.
+    enabled: true
+    # Use the credential: form for cert.pem and key.pem installed in
+    # /etc/hwi-api/tls, which the unit loads as credentials named
+    # tls_<file name>, or an absolute path to a certificate and key
+    # already present on disk.
+    # cert_file: credential:tls_cert.pem
+    # key_file: credential:tls_key.pem
+    min_version: "1.3" # "1.2" only for legacy clients
+
+  auth:
+    # Defaults to true, including when this whole auth block is absent.
+    # REQUIRED while true: at least one of mtls.enabled/token.enabled
+    # below must also be true, or the agent refuses to start -- an
+    # *enabled but empty* auth section is a contradiction, not a choice.
+    # mtls.enabled counts only while api.tls.enabled is true: without TLS
+    # here, no request can carry a client certificate.
+    # Set to false only to disable authentication deliberately (e.g. a
+    # trusted local proxy that already authenticates callers); doing so
+    # logs a loud startup warning, since every request that passes
+    # api.access then reaches the handler with no credential check at
+    # all.
+    enabled: true
+    # Each mechanism below defaults to false/off and is independently
+    # optional; either one passing admits a request. This shipped example
+    # enables token authentication below to keep the secure-by-default
+    # posture; mtls is left off as the simpler mechanism to bootstrap
+    # with (see the README quickstart).
+    mtls:
+      enabled: false
+      # client_ca_file: /etc/hwi-api/client-ca.pem
+      allowed_subjects: []
+    token:
+      enabled: true
+      # SHA-256 digests only, never plaintext tokens. Inline under
+      # hashes, in a file named by hashes_file, or both -- the two sets
+      # are unioned. REQUIRED while both token.enabled and api.auth.enabled
+      # are true; ignored when api.auth.enabled is false.
+      hashes: []
+      # hashes_file: credential:api-token-hashes
+
+  access:
+    # Deny is evaluated before allow, and wins.
+    deny: []
+    # api.access.allow is empty by default. AN EMPTY ALLOW LIST DENIES
+    # EVERY CLIENT -- there is no address that is safe to allow by
+    # default. The agent still starts, but no request will ever be
+    # admitted until this is populated, e.g.:
+    #   allow: ["10.0.0.0/16", "fd00::/48"]
+    allow: []
+
+  timeouts:
+    read_header: 5s
+    read: 10s
+    write: 30s
+    idle: 60s
+
+  max_concurrent_requests: 32
+
+ops:
+  # The ops listener serves plain HTTP with no authentication, only its
+  # own access lists below. It is meant for a local Prometheus node
+  # agent, a health checker, or an operator on the box, so it defaults
+  # to loopback-only. Its timeouts and concurrency limit are fixed
+  # built-in defaults and are not configurable. The port is one the
+  # Prometheus exporter port list leaves free, so it does not collide
+  # with node_exporter (9100) or another exporter on the same host.
+  bind:
+    addresses: ["127.0.0.1", "::1"]
+    interfaces: []
+    port: 9096
+  access:
+    allow: ["127.0.0.1/32", "::1/128"]
+    deny: []
+
+inventory:
+  refresh:
+    # The floor for every subsystem interval: none refreshes more often.
+    interval: 1m
+    # Per-subsystem overrides. Anything omitted keeps its default: enabled,
+    # at the subsystem's own default interval (links 1m; cpu, memory,
+    # topology, block, network, pci, virtualization and every udev-*
+    # subsystem but udev-drm 5m; os 15m; udev-drm 30m; slots, chassis,
+    # bios, baseboard and product 1h). Any interval below the base
+    # interval above is raised to it. Keep topology, cpu and memory
+    # together: topology is composed from the other two. For example:
+    # subsystems:
+    #   pci: { interval: 30m }
+    #   udev-drm: { enabled: false }
+
+log:
+  level: info # debug, info, warn or error

@@ -1,0 +1,13 @@
+{
+  // Prose is hard-wrapped at 200 characters; tables are exempt because
+  // cell text is never hard-wrapped, so a row is necessarily one long line.
+  "MD013": {
+    "line_length": 200,
+    "tables": false
+  },
+
+  // Consistent pipe alignment would pad every row in a column out to the
+  // longest cell, pushing rows past the 200-character limit for cosmetic
+  // alignment alone.
+  "MD060": false
+}

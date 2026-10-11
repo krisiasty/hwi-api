@@ -1,0 +1,49 @@
+version: "2"
+
+# This file exists to silence specific, individually-justified shapes of
+# errcheck finding that golangci-lint's default config (no linters.default
+# override, so the built-in standard set stays exactly as it was) reports on
+# this tree, and nothing else. Every exclusion below is narrowed to the
+# specific file(s) and message it covers, and each one is justified
+# individually rather than turned off wholesale, precisely so this file
+# stays something a reviewer can audit line by line instead of a blanket
+# "quiet errcheck" switch that would also hide a real bug. unused, and every
+# other default linter, stay fully enabled.
+
+issues:
+  # Default is 3: golangci-lint drops identical-text findings past the
+  # third from the report, counted but not shown, so a config written
+  # against the visible-but-truncated list covers less than it looks like
+  # it covers. Uncapped here so a run always shows everything, at the cost
+  # of a noisier report on the rare occasion something is genuinely wrong
+  # in many places at once.
+  max-same-issues: 0
+
+linters:
+  exclusions:
+    rules:
+      # Every _test.go Close() this project leaves unchecked is cleanup on
+      # an already-successful open (a response body, a listener, a cert/key
+      # file written by the test itself): nothing downstream reads that
+      # error, and the test has already asserted what it cares about by the
+      # time the deferred Close runs.
+      #
+      # Scoped to that shape specifically, with a text filter, not to
+      # errcheck-on-_test.go generally: a bare `path: _test\.go` with no
+      # `text:` would silence every errcheck finding in every test file,
+      # including a future test that ignores a genuine setup or fixture
+      # error rather than a trailing Close().
+      - path: _test\.go
+        linters:
+          - errcheck
+        text: "Error return value of `.*\\.Close` is not checked"
+
+      # internal/config/load.go's `defer f.Close()` is on a file opened
+      # read-only by os.Open a few lines above, purely to decode
+      # configuration out of it. A close error here (fd already gone, disk
+      # unmounted mid-read) cannot corrupt anything this process has
+      # written and carries nothing actionable to report.
+      - path: internal/config/load\.go
+        linters:
+          - errcheck
+        text: "Error return value of `f\\.Close` is not checked"

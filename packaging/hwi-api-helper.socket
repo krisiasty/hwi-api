@@ -1,0 +1,21 @@
+[Unit]
+Description=hwi-api privileged helper socket
+Documentation=https://github.com/krisiasty/hwi-api/blob/main/docs/security.md
+
+[Socket]
+# Directly under root-owned /run: only root can create, rename or replace
+# the socket, and only root and the daemon's group can connect to it.
+ListenStream=/run/hwi-api-helper.sock
+SocketUser=root
+SocketGroup=hwi-api
+SocketMode=0660
+# One hwi-api-helper@.service instance per connection, so nothing
+# privileged runs between collections, and a hardware read that hangs
+# stalls one connection, never the helper.
+Accept=yes
+MaxConnections=4
+# Remove the socket file when the unit stops, so a stopped package leaves none.
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

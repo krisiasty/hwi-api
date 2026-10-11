@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+# Every external action is pinned to a full commit SHA rather than a tag,
+# because a tag is movable: whoever can push one can change what runs here,
+# and this workflow is the one that holds the token that publishes releases.
+# The trailing comment is the release that SHA is.
+jobs:
+  release:
+    name: Publish archives, checksums, deb and rpm
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history and tags: GoReleaser derives the version and
+          # changelog from git tags, which a shallow clone would not have.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          install-only: true
+          version: "~> v2"
+
+      # .goreleaser.yaml's builds, archives, checksum and nfpms sections
+      # define what ships: linux/amd64 and linux/arm64 binaries, a
+      # hwi-api tar.gz per architecture, a checksums.txt, and a .deb and
+      # .rpm per architecture. This step only triggers that pipeline and
+      # supplies the token it publishes the GitHub release with.
+      - name: Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: goreleaser release --clean

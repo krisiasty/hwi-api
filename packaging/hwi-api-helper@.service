@@ -1,0 +1,63 @@
+[Unit]
+Description=hwi-api privileged helper, for one connection
+Documentation=https://github.com/krisiasty/hwi-api/blob/main/docs/security.md
+# Failed instances are removed rather than kept in the unit list.
+CollectMode=inactive-or-failed
+
+[Service]
+# Reads the root-only DMI files, the SMBIOS table and PCI VPD for the
+# daemon, which holds no capabilities. It answers fixed requests only, from
+# the hwi-api user only; see docs/security.md and internal/helper.
+ExecStart=/usr/bin/hwi-api helper
+User=hwi-api-helper
+Group=hwi-api-helper
+
+# Reading those root-only files takes CAP_DAC_READ_SEARCH, not root. That
+# capability bypasses read permission on every file the process sees, so
+# the process sees almost none: an empty, read-only root with only /sys,
+# its own binary and /etc/passwd (to look up the hwi-api user) bound in,
+# read-only. systemd adds its API filesystems and /run to that root: /proc
+# shows only this process (ProtectProc=invisible, ProcSubset=pid) and /dev
+# is a minimal private one (PrivateDevices=yes), so the capability still
+# reaches no other process's files, no device and nothing under /etc but
+# passwd. /sys is bound with norbind, without the file systems mounted
+# below it (debugfs, securityfs, efivarfs and the like): everything the
+# helper reads is in sysfs itself, so none of them needs to reach it. The
+# cgroup tree is bound back, read-only, because systemd needs the unit's own
+# cgroup when it sets up the namespace (memory pressure watching,
+# ProtectControlGroups=); cgroup files are world-readable, so the capability
+# gains nothing there. debugfs, tracefs, securityfs, efivarfs and the rest
+# stay out.
+AmbientCapabilities=CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+NoNewPrivileges=yes
+TemporaryFileSystem=/:ro
+BindReadOnlyPaths=/sys:/sys:norbind /sys/fs/cgroup /usr/bin/hwi-api /etc/passwd
+ProtectProc=invisible
+ProcSubset=pid
+PrivateDevices=yes
+
+# No network: the connection arrives as an already-open Unix socket.
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+
+# An instance still running a minute later is stopped; the daemon's
+# requests take seconds at most.
+RuntimeMaxSec=60
+
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+DevicePolicy=closed
+UMask=0077
