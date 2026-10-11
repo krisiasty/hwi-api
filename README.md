@@ -284,10 +284,10 @@ directives) instead of a literal path.
 | `api.auth.token.hashes_file`        | *(none)*                        | Unioned with `hashes` when both are set. At least one digest, from either, is required when both `api.auth.enabled` and `token.enabled` are `true`. |
 | `api.access.allow`                  | `[]`                             | **Empty denies every client.** CIDR prefixes or bare addresses, either address family.           |
 | `api.access.deny`                   | `[]`                             | Evaluated before `allow`, and wins.                                                               |
-| `api.timeouts.read_header`          | `5s`                             |                                                                                                  |
-| `api.timeouts.read`                 | `10s`                            |                                                                                                  |
-| `api.timeouts.write`                | `30s`                            |                                                                                                  |
-| `api.timeouts.idle`                 | `60s`                            |                                                                                                  |
+| `api.timeouts.read_header`          | `5s`                             | Must be a positive duration, like the other three timeouts: zero or a negative value is refused at startup rather than disabling the deadline. |
+| `api.timeouts.read`                 | `10s`                            | Must be a positive duration.                                                                     |
+| `api.timeouts.write`                | `30s`                            | Must be a positive duration.                                                                     |
+| `api.timeouts.idle`                 | `60s`                            | Must be a positive duration.                                                                     |
 | `api.max_concurrent_requests`       | `32`                             | Beyond this, a request gets `503`/`too_many_requests` with `Retry-After: 1` rather than queuing. |
 | `ops.bind.addresses`                | `["127.0.0.1", "::1"]`           | Loopback only by default.                                                                        |
 | `ops.bind.interfaces`               | `[]`                             |                                                                                                  |

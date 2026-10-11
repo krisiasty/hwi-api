@@ -100,6 +100,8 @@ api:
     #   allow: ["10.0.0.0/16", "fd00::/48"]
     allow: []
 
+  # Each timeout must be a positive duration: zero or a negative value
+  # is refused at startup rather than disabling the deadline.
   timeouts:
     read_header: 5s
     read: 10s
