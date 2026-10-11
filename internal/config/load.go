@@ -282,6 +282,25 @@ func (c Config) Validate() ([]string, error) {
 	}
 	warnings = append(warnings, c.topologyWarnings()...)
 
+	// http.Server reads a negative timeout, and a zero read or write
+	// timeout, as no deadline at all, and a zero read_header or idle as
+	// "use read". Header reads come before authentication and the
+	// concurrency limit, so a missing deadline lets a slow or idle peer hold
+	// a connection indefinitely. Only a positive duration is a deadline.
+	for _, t := range []struct {
+		field string
+		value Duration
+	}{
+		{"api.timeouts.read_header", c.API.Timeouts.ReadHeader},
+		{"api.timeouts.read", c.API.Timeouts.Read},
+		{"api.timeouts.write", c.API.Timeouts.Write},
+		{"api.timeouts.idle", c.API.Timeouts.Idle},
+	} {
+		if t.value <= 0 {
+			return nil, fmt.Errorf("%s must be a positive duration", t.field)
+		}
+	}
+
 	if c.API.MaxConcurrentRequests <= 0 {
 		return nil, fmt.Errorf("api.max_concurrent_requests must be positive")
 	}

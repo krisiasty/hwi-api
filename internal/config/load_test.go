@@ -198,6 +198,17 @@ func TestValidateRejectsBrokenConfigurations(t *testing.T) {
 		{"zero port", func(c *Config) { c.API.Bind.Port = 0 }, "port"},
 		{"port out of range", func(c *Config) { c.API.Bind.Port = 70000 }, "port"},
 		{"negative refresh interval", func(c *Config) { c.Inventory.Refresh.Interval = Duration(-time.Second) }, "interval"},
+		// http.Server reads a negative timeout, and a zero read or write
+		// timeout, as no deadline at all; a zero read_header or idle falls
+		// back to read. None is a deadline the operator wrote down.
+		{"negative read_header timeout", func(c *Config) { c.API.Timeouts.ReadHeader = Duration(-time.Second) }, "api.timeouts.read_header must"},
+		{"negative read timeout", func(c *Config) { c.API.Timeouts.Read = Duration(-time.Second) }, "api.timeouts.read must"},
+		{"negative write timeout", func(c *Config) { c.API.Timeouts.Write = Duration(-time.Second) }, "api.timeouts.write must"},
+		{"negative idle timeout", func(c *Config) { c.API.Timeouts.Idle = Duration(-time.Second) }, "api.timeouts.idle must"},
+		{"zero read_header timeout", func(c *Config) { c.API.Timeouts.ReadHeader = 0 }, "api.timeouts.read_header must"},
+		{"zero read timeout", func(c *Config) { c.API.Timeouts.Read = 0 }, "api.timeouts.read must"},
+		{"zero write timeout", func(c *Config) { c.API.Timeouts.Write = 0 }, "api.timeouts.write must"},
+		{"zero idle timeout", func(c *Config) { c.API.Timeouts.Idle = 0 }, "api.timeouts.idle must"},
 		{"malformed allow entry", func(c *Config) { c.API.Access.Allow = []string{"10.0.0.0/64"} }, "allow"},
 		{"mtls without a ca", func(c *Config) { c.API.Auth.MTLS.Enabled = true }, "client_ca_file"},
 		{"auth enabled with no mechanism selected", func(c *Config) { c.API.Auth.Token.Enabled = false }, "authentication"},
