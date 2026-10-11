@@ -103,7 +103,8 @@ that will not show up as an error:
   that string; a certificate whose SAN lists that same DNS name but has a different CN is refused.
   - **A full-DN pin** — one with further attributes, such as `CN=inventory-client,O=Trusted` — must match the whole Subject DN as rendered in RFC 4514
     form, and never falls back to the common name. A certificate whose CN is literally `inventory-client,O=Trusted` is refused. To pin a CN that itself
-    contains `,`, `+` or `;`, escape the character as RFC 4514 does (`CN=inventory-client\,O=Trusted` or `CN=inventory-client\2CO=Trusted`).
+    contains `,`, `+` or `;`, escape the character as RFC 4514 does (`CN=inventory-client\,O=Trusted` or `CN=inventory-client\2CO=Trusted`). A
+    malformed escape — a backslash before anything other than an RFC 4514 special character or two hex digits — never falls back to the common name.
 - **A bare pin with no `=`** matches the Subject common name (exact match) or any DNS Subject Alternative Name (case-insensitive). Example:
   `allowed_subjects: ["inventory-client.example.internal"]` matches a certificate whose CN *or* whose SAN list contains that name.
 

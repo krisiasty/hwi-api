@@ -152,6 +152,14 @@ func TestMTLSFullDNPinIsNotACommonNamePin(t *testing.T) {
 		{"escaped single-CN pin admits the literal CN", `CN=inventory-client\,O=Trusted`, literalCN, true},
 		{"hex-escaped single-CN pin admits the literal CN", `CN=inventory-client\2CO=Trusted`, literalCN, true},
 		{"escaped single-CN pin refuses the unescaped DN", `CN=inventory-client\,O=Trusted`, fullDN, false},
+		{"escaped plus in a single-CN pin admits the literal CN", `CN=inventory-client\+O=Trusted`, literalPlusCN, true},
+
+		// A malformed escape is not an RFC 4514 pin at all, so it must not
+		// be read as some other CN by dropping the backslash.
+		{"escape of a non-special character gets no CN fallback", `CN=inventory\q-client`, ca.issue(t, "inventoryq-client"), false},
+		{"truncated hex escape gets no CN fallback", `CN=inventory\2`, ca.issue(t, "inventory2"), false},
+		{"half-hex escape gets no CN fallback", `CN=inventory\2G`, ca.issue(t, "inventory2G"), false},
+		{"dangling backslash gets no CN fallback", `CN=inventory-client\`, ca.issue(t, "inventory-client"), false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

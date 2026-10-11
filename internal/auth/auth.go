@@ -178,8 +178,10 @@ func (a *Authenticator) subjectAllowed(chains [][]*x509.Certificate) bool {
 // else, and if so returns the CN value with its RFC 4514 escapes decoded.
 // An unescaped "," or ";" separates RDNs and an unescaped "+" joins
 // attributes within one, so either makes the pin a full DN rather than a
-// single CN. A malformed escape is treated the same way: a pin that cannot
-// be read unambiguously as a single CN gets no CN fallback.
+// single CN. A backslash must introduce one of RFC 4514's special
+// characters or a complete pair of hex digits; any other escape is
+// malformed and gets no CN fallback, rather than being read as some other
+// CN by dropping the backslash.
 func singleCNPin(pin string) (string, bool) {
 	value, ok := strings.CutPrefix(pin, "CN=")
 	if !ok {
@@ -192,17 +194,24 @@ func singleCNPin(pin string) (string, bool) {
 		case ',', ';', '+':
 			return "", false
 		case '\\':
-			if i+2 < len(value) && isHex(value[i+1]) && isHex(value[i+2]) {
-				b, _ := hex.DecodeString(value[i+1 : i+3])
-				cn.WriteByte(b[0])
-				i += 2
-				continue
-			}
 			if i+1 >= len(value) {
 				return "", false
 			}
-			cn.WriteByte(value[i+1])
-			i++
+			switch next := value[i+1]; {
+			case isHex(next):
+				// A hex digit starts a hexpair; it needs its second digit.
+				if i+2 >= len(value) || !isHex(value[i+2]) {
+					return "", false
+				}
+				b, _ := hex.DecodeString(value[i+1 : i+3])
+				cn.WriteByte(b[0])
+				i += 2
+			case strings.IndexByte(`\"+,;<>#= `, next) >= 0:
+				cn.WriteByte(next)
+				i++
+			default:
+				return "", false
+			}
 		default:
 			cn.WriteByte(c)
 		}
