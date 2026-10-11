@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -644,7 +645,7 @@ func buildProbers(store *inventory.Store, rootFS fs.FS, logger *slog.Logger) inv
 	// and DMI entries it reads are already populated when this runs.
 	probers[apiv1.SubsystemVirtualization] = inventory.NewVirtualizationProber(
 		func(context.Context) (inventory.VirtSignals, error) {
-			return collectVirtSignals(store, rootFS), nil
+			return collectVirtSignals(store, rootFS, runtime.GOARCH), nil
 		})
 
 	return probers
@@ -668,15 +669,19 @@ var dmiSources = []struct {
 // collectVirtSignals assembles what inventory.Detect needs from the store's
 // current cpu, product, bios, baseboard and chassis entries plus the two
 // kernel-exported hypervisor hints. It never fails: an absent signal is
-// simply absent, which Detect already treats as "no evidence".
-func collectVirtSignals(store *inventory.Store, rootFS fs.FS) inventory.VirtSignals {
+// simply absent, which Detect already treats as "no evidence". arch is the
+// host's GOARCH, which says whether the capabilities can carry a
+// hypervisor flag at all.
+func collectVirtSignals(store *inventory.Store, rootFS fs.FS, arch string) inventory.VirtSignals {
 	capabilities := cpuCapabilities(store)
 	signals := inventory.VirtSignals{
 		// CPUDataPresent separates "the CPU reported no hypervisor flag",
 		// which is strong bare-metal evidence, from "no CPU flags were
 		// available at all", which is none - so it is set only when the cpu
-		// entry actually yielded capabilities.
-		CPUDataPresent:       len(capabilities) > 0,
+		// entry actually yielded capabilities, and only on x86. Only x86's
+		// cpuinfo flags carry a hypervisor bit; arm64's Features never do,
+		// so a guest's Features look exactly like a bare-metal host's.
+		CPUDataPresent:       hypervisorFlagArch(arch) && len(capabilities) > 0,
 		CPUCapabilities:      capabilities,
 		DMI:                  make(map[string]string, len(dmiSources)),
 		HypervisorType:       readHostFile(rootFS, "sys/hypervisor/type"),
@@ -689,6 +694,12 @@ func collectVirtSignals(store *inventory.Store, rootFS fs.FS) inventory.VirtSign
 		}
 	}
 	return signals
+}
+
+// hypervisorFlagArch reports whether arch's CPU capabilities include the
+// x86 hypervisor flag when the kernel runs as a guest.
+func hypervisorFlagArch(arch string) bool {
+	return arch == "amd64" || arch == "386"
 }
 
 // cpuCapabilities returns the union of every processor's capability list
