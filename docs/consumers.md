@@ -362,13 +362,14 @@ and a newer agent release carries a newer one. `devices` lists every PCI functio
   helper (see `docs/security.md`). Reading VPD wakes a powered-down device and the port above it, so the agent does not read it from a device that
   is runtime-suspended or in `"D3cold"`, such as an idle GPU: it reports the VPD it last read from that card while the card was awake, if it has
   read it since it started and every `pci` refresh since has found a device at that address with the same vendor, device and subsystem IDs. A
-  refresh that finds the address empty or another model there, or finds the card awake but cannot read its VPD, forgets that VPD, so a
-  replacement is reported unread until a refresh reads it awake. PCI IDs name a model, not a card, so a card swapped for one of the same model
-  between two refreshes, and powered down before the second, cannot be told apart without waking it: it reports the removed card's VPD until a
-  refresh finds it awake.
+  refresh that finds the address empty or another model there forgets that VPD, so a replacement is reported unread until a refresh reads it
+  awake; so does a refresh whose read of the awake card fails. A refresh that cannot read the card's IDs reports a powered-down card unread, but
+  keeps the VPD for the refreshes that can. PCI IDs name a model, not a card, so a card swapped for one of the same model between two refreshes
+  cannot be told apart without reading it: while it is powered down, or its read is skipped after an earlier one failed, it reports the removed
+  card's VPD, until a refresh reads it.
 - **`vpd_error`**, instead of `vpd`, on a device whose VPD exists but could not be read or decoded, saying why: the helper is not configured or
   did not answer, the read failed or timed out (some controllers never answer one), or the data is malformed or fails its checksum. A VPD is never
-  reported in part. A powered-down device whose VPD the agent has not read while it was awake says
+  reported in part. A powered-down device whose VPD the agent has not read while it was awake, or has since forgotten as described under `vpd`, says
   `not read: the device is powered down, and reading its VPD would wake it`. Once a read times out or the helper does not answer, the agent stops
   asking for the rest of that refresh, so one faulty card does not hold up every subsystem: the devices after it say
   `not read: an earlier VPD read in this refresh failed (...)`, with that first error, and the next refresh tries again.

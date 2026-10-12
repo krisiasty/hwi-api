@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -164,12 +165,7 @@ func NewPCIProber(rootFS fs.FS, db *pciids.DB, privileged fs.FS) Prober {
 				out.Devices = append(out.Devices, d)
 			}
 		}
-		// A card this probe did not find, or found another model in place
-		// of, has gone, and whatever appears at its address later may be
-		// another card of its model, which pciCard cannot tell from it.
-		// Forget its VPD, so a replacement found powered down is reported
-		// unread, not with the removed card's identity.
-		cache.retain(out.Devices)
+		src.vpd.commit()
 		return out, nil
 	})
 }
@@ -238,6 +234,7 @@ func (src pciSources) readDevice(address string) (PCIDevice, bool) {
 		d.VPD, d.VPDError = src.vpd.read(card, asleep)
 	}
 	if !pciDeviceExists(fsys, dir) {
+		src.vpd.drop(address)
 		return PCIDevice{}, false
 	}
 	return d, true
@@ -246,13 +243,19 @@ func (src pciSources) readDevice(address string) (PCIDevice, bool) {
 // pciCard identifies the card at an address: a VPD read from it is reported
 // again only while the same card is there. Its IDs name the card's model,
 // not the card, so the prober also forgets an address's VPD whenever a
-// probe finds it empty or another model there, whether or not that model
-// has VPD (vpdCache.retain), or finds the card awake but does not read it
-// (vpdReader.read). A same-model swap between two probes, with the
-// replacement powered down by the second, is beyond both: nothing sysfs
-// offers without waking the card tells them apart.
+// probe finds it empty or another model there (vpdCache). A same-model
+// swap between two probes is beyond it until a probe reads the new card:
+// nothing sysfs offers without waking the card tells them apart.
 type pciCard struct {
 	address, vendor, device, subVendor, subDevice string
+}
+
+// identified reports whether every one of the card's IDs could be read. A
+// card with an unreadable ID cannot be told from another such card, so it
+// is never cached, and it neither matches a cached card nor proves that
+// one has gone.
+func (c pciCard) identified() bool {
+	return c.vendor != unknown && c.device != unknown && c.subVendor != unknown && c.subDevice != unknown
 }
 
 // pciCardOf is the card a probe reported d as.
@@ -260,11 +263,15 @@ func pciCardOf(d PCIDevice) pciCard {
 	return pciCard{address: d.Address, vendor: d.Vendor.ID, device: d.Product.ID, subVendor: d.Subsystem.VendorID, subDevice: d.Subsystem.ID}
 }
 
-// vpdCache keeps, for each address, the VPD last read from the card there
-// while it was awake. It is a prober's own, kept across its probes. Its
-// methods are safe for concurrent use, but retain assumes the prober's
-// probes do not overlap, as the Refresher's per-subsystem slot ensures: an
-// older probe's retain would forget what a newer one has just read.
+// vpdCache holds, for each address, the VPD the prober last vouched for:
+// the VPD read from the card there while it was awake, carried over by
+// every probe since that found the same card there without reading it.
+// Each probe replaces it whole with what that probe vouched for, so
+// whatever it did not carry over is forgotten: an address it found empty,
+// or holding another model, whether or not that model has VPD; and a card
+// whose read failed. Its methods are safe for concurrent use, but the
+// prober's probes must not overlap, as the Refresher's per-subsystem slot
+// ensures: an older probe's swap would discard what a newer one has read.
 type vpdCache struct {
 	mu   sync.Mutex
 	last map[string]cachedVPD
@@ -275,44 +282,21 @@ type cachedVPD struct {
 	vpd  *PCIVPD
 }
 
-func newVPDCache() *vpdCache { return &vpdCache{last: map[string]cachedVPD{}} }
+func newVPDCache() *vpdCache { return &vpdCache{} }
 
-// get is the VPD last read from card, if it was read from this very card.
-func (c *vpdCache) get(card pciCard) (*PCIVPD, bool) {
+// at is the entry for address, if there is one.
+func (c *vpdCache) at(address string) (cachedVPD, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e, ok := c.last[card.address]
-	return e.vpd, ok && e.card == card
+	e, ok := c.last[address]
+	return e, ok
 }
 
-// set records v as card's VPD, or, when v is nil, forgets the card's.
-func (c *vpdCache) set(card pciCard, v *PCIVPD) {
+// swap replaces every entry with next.
+func (c *vpdCache) swap(next map[string]cachedVPD) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if v == nil {
-		delete(c.last, card.address)
-		return
-	}
-	c.last[card.address] = cachedVPD{card: card, vpd: v}
-}
-
-// retain forgets every VPD whose card is not among devices: its address
-// is gone, or holds another model. Devices without VPD count, since they
-// are never looked up in the cache, yet still prove the card has gone. The
-// lookup is built before the lock is taken, so a probe holds it no longer
-// than the deletions take.
-func (c *vpdCache) retain(devices []PCIDevice) {
-	present := make(map[string]pciCard, len(devices))
-	for _, d := range devices {
-		present[d.Address] = pciCardOf(d)
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for address, e := range c.last {
-		if card, ok := present[address]; !ok || card != e.card {
-			delete(c.last, address)
-		}
-	}
+	c.last = next
 }
 
 // vpdReader reads the devices' VPD through privileged, the helper's file
@@ -320,6 +304,10 @@ func (c *vpdCache) retain(devices []PCIDevice) {
 type vpdReader struct {
 	privileged fs.FS
 	cache      *vpdCache
+	// next is what this probe vouches for, which commit makes the cache.
+	// It stays nil until the first entry, so a host with nothing to cache
+	// allocates nothing.
+	next map[string]cachedVPD
 	// failed is this probe's first VPD read that the helper did not answer,
 	// or answered as hung. Each such read costs up to the client's timeout,
 	// and one faulty card or a missing helper would cost it again for every
@@ -336,22 +324,53 @@ func (r *vpdReader) read(card pciCard, asleep bool) (*PCIVPD, string) {
 	if r.privileged == nil {
 		return nil, "the privileged helper is not configured"
 	}
+	cached, ok := r.cache.at(card.address)
+	// The cached card is still there as far as this probe can tell. A card
+	// whose IDs cannot be read gives no evidence either way.
+	there := ok && (cached.card == card || !card.identified())
 	if asleep {
-		if v, ok := r.cache.get(card); ok {
-			return v, ""
+		if there {
+			r.vouch(cached)
+			if card.identified() {
+				return cached.vpd, ""
+			}
 		}
 		return nil, "not read: the device is powered down, and reading its VPD would wake it"
 	}
 	if r.failed != nil {
-		// The card is awake, so it may be a same-model replacement that
-		// would have been read now; the cached VPD cannot vouch for it.
-		r.cache.set(card, nil)
+		// A failed read elsewhere says nothing about this card.
+		if there {
+			r.vouch(cached)
+		}
 		return nil, fmt.Sprintf("not read: an earlier VPD read in this refresh failed (%v)", r.failed)
 	}
 	v, why := r.readHelper(card.address)
-	r.cache.set(card, v)
+	switch {
+	case v == nil:
+		// The card's VPD is gone or cannot be read: forget it.
+	case card.identified():
+		r.vouch(cachedVPD{card: card, vpd: v})
+	case there && reflect.DeepEqual(v, cached.vpd):
+		// The card cannot be identified, but reads as the cached one.
+		r.vouch(cached)
+	}
 	return v, why
 }
+
+// vouch carries e into the cache this probe leaves.
+func (r *vpdReader) vouch(e cachedVPD) {
+	if r.next == nil {
+		r.next = map[string]cachedVPD{}
+	}
+	r.next[e.card.address] = e
+}
+
+// drop withdraws what this probe vouched for at address: its device was
+// removed during the probe.
+func (r *vpdReader) drop(address string) { delete(r.next, address) }
+
+// commit makes what this probe vouched for the cache, forgetting the rest.
+func (r *vpdReader) commit() { r.cache.swap(r.next) }
 
 // readHelper asks the helper for the VPD at address and decodes it.
 func (r *vpdReader) readHelper(address string) (*PCIVPD, string) {
