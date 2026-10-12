@@ -32,7 +32,11 @@ type Client struct {
 func newClient(c conn) (*Client, error) {
 	cl := &Client{c: c}
 	cl.seq++
-	msgs, err := c.roundTrip(familyRequest(cl.seq), cl.seq)
+	req, err := familyRequest(cl.seq)
+	var msgs []message
+	if err == nil {
+		msgs, err = c.roundTrip(req, cl.seq)
+	}
 	if err == nil {
 		cl.family, err = parseFamilyID(msgs)
 	}
@@ -45,7 +49,11 @@ func newClient(c conn) (*Client, error) {
 // query sends one ethtool GET of the interface under the next sequence number and returns its reply.
 func (c *Client) query(cmd uint8, ifindex uint32, name string) ([]message, error) {
 	c.seq++
-	return c.c.roundTrip(request(c.family, cmd, c.seq, ifindex, name), c.seq)
+	req, err := request(c.family, cmd, c.seq, ifindex, name)
+	if err != nil {
+		return nil, err
+	}
+	return c.c.roundTrip(req, c.seq)
 }
 
 // Features returns the interface's offload features, keyed by the kernel's feature names.

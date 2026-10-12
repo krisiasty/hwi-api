@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"os"
 	"reflect"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -80,8 +82,8 @@ func (f *fakeConn) close() error {
 func newFakeClient(t *testing.T, replies map[uint8][]message) (*Client, *fakeConn) {
 	t.Helper()
 	all := map[uint8][]message{
-		ctrlCmdGetFamily: genlReply(t, ctrlCmdNewFamily, stringAttr(ctrlAttrFamilyName, ethtoolFamilyName),
-			encodeAttr(ctrlAttrFamilyID, binary.NativeEndian.AppendUint16(nil, testFamily))),
+		ctrlCmdGetFamily: genlReply(t, ctrlCmdNewFamily, testStringAttr(t, ctrlAttrFamilyName, ethtoolFamilyName),
+			testAttr(t, ctrlAttrFamilyID, binary.NativeEndian.AppendUint16(nil, testFamily))),
 	}
 	maps.Copy(all, replies)
 	f := &fakeConn{t: t, replies: all}
@@ -116,8 +118,8 @@ func TestNewClientNoFamily(t *testing.T) {
 func TestClientFeatures(t *testing.T) {
 	c, f := newFakeClient(t, map[uint8][]message{
 		ethtoolMsgFeaturesGet: genlReply(t, ethtoolMsgFeaturesGetReply,
-			verboseBitset(ethtoolAFeaturesHW, true, testBit{index: 1, name: "rx-checksum"}),
-			verboseBitset(ethtoolAFeaturesActive, true, testBit{index: 1, name: "rx-checksum"})),
+			verboseBitset(t, ethtoolAFeaturesHW, true, testBit{index: 1, name: "rx-checksum"}),
+			verboseBitset(t, ethtoolAFeaturesActive, true, testBit{index: 1, name: "rx-checksum"})),
 	})
 	got, err := c.Features(4, "eth4")
 	if err != nil {
@@ -133,14 +135,14 @@ func TestClientFeatures(t *testing.T) {
 
 func TestClientLink(t *testing.T) {
 	linkModes := genlReply(t, ethtoolMsgLinkModesGetReply,
-		verboseBitset(ethtoolALinkModesOurs, false, testBit{index: 31, name: "25000baseCR/Full", set: true}),
+		verboseBitset(t, ethtoolALinkModesOurs, false, testBit{index: 31, name: "25000baseCR/Full", set: true}),
 		u32Attr(ethtoolALinkModesSpeed, 25000))
 	modes := []string{"25000baseCR/Full"}
 
 	t.Run("with port", func(t *testing.T) {
 		c, f := newFakeClient(t, map[uint8][]message{
 			ethtoolMsgLinkModesGet: linkModes,
-			ethtoolMsgLinkInfoGet:  genlReply(t, ethtoolMsgLinkInfoGetReply, u8Attr(ethtoolALinkInfoPort, 0x05)),
+			ethtoolMsgLinkInfoGet:  genlReply(t, ethtoolMsgLinkInfoGetReply, u8Attr(t, ethtoolALinkInfoPort, 0x05)),
 		})
 		got, err := c.Link(7, "eth7")
 		if err != nil {
@@ -197,7 +199,7 @@ func TestClientLink(t *testing.T) {
 func TestClientFEC(t *testing.T) {
 	c, f := newFakeClient(t, map[uint8][]message{
 		ethtoolMsgFECGet: genlReply(t, ethtoolMsgFECGetReply,
-			verboseBitset(ethtoolAFECModes, true, testBit{index: 50, name: "RS"}), u32Attr(ethtoolAFECActive, 50)),
+			verboseBitset(t, ethtoolAFECModes, true, testBit{index: 50, name: "RS"}), u32Attr(ethtoolAFECActive, 50)),
 	})
 	got, err := c.FEC(3, "eth3")
 	if err != nil {
@@ -295,11 +297,12 @@ func TestClientErrorsNameTheQuery(t *testing.T) {
 }
 
 // encodeTestMessage returns one encoded message of type typ and sequence number seq with an empty generic-netlink payload of command cmd.
-func encodeTestMessage(typ uint16, seq uint32, cmd uint8) []byte {
+func encodeTestMessage(t testing.TB, typ uint16, seq uint32, cmd uint8) []byte {
+	t.Helper()
 	if typ < nlmsgMinType {
-		return encodeMessage(typ, 0, seq, binary.NativeEndian.AppendUint32(nil, 0))
+		return testMessage(t, typ, 0, seq, binary.NativeEndian.AppendUint32(nil, 0))
 	}
-	return encodeMessage(typ, 0, seq, []byte{cmd, genlVersion, 0, 0})
+	return testMessage(t, typ, 0, seq, []byte{cmd, genlVersion, 0, 0})
 }
 
 func TestReplyMessages(t *testing.T) {
@@ -312,26 +315,26 @@ func TestReplyMessages(t *testing.T) {
 	}{
 		{
 			name:     "the reply",
-			buf:      encodeTestMessage(testFamily, 5, 11),
+			buf:      encodeTestMessage(t, testFamily, 5, 11),
 			wantSeqs: []uint32{5}, wantTyps: []uint16{testFamily}, done: true,
 		},
 		{
 			name: "a stale reply is dropped",
-			buf:  encodeTestMessage(testFamily, 4, 11),
+			buf:  encodeTestMessage(t, testFamily, 4, 11),
 		},
 		{
 			name:     "a stale reply then the reply",
-			buf:      append(encodeTestMessage(testFamily, 4, 11), encodeTestMessage(testFamily, 5, 11)...),
+			buf:      append(encodeTestMessage(t, testFamily, 4, 11), encodeTestMessage(t, testFamily, 5, 11)...),
 			wantSeqs: []uint32{5}, wantTyps: []uint16{testFamily}, done: true,
 		},
 		{
 			name:     "an error",
-			buf:      encodeTestMessage(nlmsgError, 5, 0),
+			buf:      encodeTestMessage(t, nlmsgError, 5, 0),
 			wantSeqs: []uint32{5}, wantTyps: []uint16{nlmsgError}, done: true,
 		},
 		{
 			name:     "done",
-			buf:      encodeTestMessage(nlmsgDone, 5, 0),
+			buf:      encodeTestMessage(t, nlmsgDone, 5, 0),
 			wantSeqs: []uint32{5}, wantTyps: []uint16{nlmsgDone}, done: true,
 		},
 	}
@@ -352,5 +355,20 @@ func TestReplyMessages(t *testing.T) {
 				t.Errorf("replyMessages = seqs %v types %v done %v; want %v %v %v", seqs, typs, done, tt.wantSeqs, tt.wantTyps, tt.done)
 			}
 		})
+	}
+}
+
+// A name no interface can have, too long for its attribute, fails that one
+// query with an error, before anything is sent; it never takes the process
+// down.
+func TestQueryRefusesAnOverlongInterfaceNameWithoutSending(t *testing.T) {
+	c, f := newFakeClient(t, nil)
+	sent := len(f.sent)
+	_, err := c.Features(4, strings.Repeat("x", math.MaxUint16))
+	if err == nil || !strings.Contains(err.Error(), "interface name") {
+		t.Errorf("Features = %v, want an interface name error", err)
+	}
+	if len(f.sent) != sent {
+		t.Errorf("%d requests sent for the overlong name, want none", len(f.sent)-sent)
 	}
 }

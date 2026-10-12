@@ -13,7 +13,7 @@ import (
 func genlReply(t *testing.T, cmd uint8, attrs ...[]byte) []message {
 	t.Helper()
 	payload := append([]byte{cmd, genlVersion, 0, 0}, bytes.Join(attrs, nil)...)
-	msgs, err := parseMessages(encodeMessage(0x1b, 0, 1, payload))
+	msgs, err := parseMessages(testMessage(t, 0x1b, 0, 1, payload))
 	if err != nil {
 		t.Fatalf("parseMessages: %v", err)
 	}
@@ -24,20 +24,25 @@ func genlReply(t *testing.T, cmd uint8, attrs ...[]byte) []message {
 func errorReply(t *testing.T, code int32) []message {
 	t.Helper()
 	payload := binary.NativeEndian.AppendUint32(nil, uint32(code))
-	payload = append(payload, encodeMessage(0x1b, nlmFRequest, 1, nil)...) // the echoed request header
-	msgs, err := parseMessages(encodeMessage(nlmsgError, 0, 1, payload))
+	payload = append(payload, testMessage(t, 0x1b, nlmFRequest, 1, nil)...) // the echoed request header
+	msgs, err := parseMessages(testMessage(t, nlmsgError, 0, 1, payload))
 	if err != nil {
 		t.Fatalf("parseMessages: %v", err)
 	}
 	return msgs
 }
 
-func u8Attr(typ uint16, v uint8) []byte {
-	return encodeAttr(typ, []byte{v})
+func u8Attr(t testing.TB, typ uint16, v uint8) []byte {
+	t.Helper()
+	return testAttr(t, typ, []byte{v})
 }
 
 func TestFamilyRequest(t *testing.T) {
-	msgs, err := parseMessages(familyRequest(7))
+	req, err := familyRequest(7)
+	if err != nil {
+		t.Fatalf("familyRequest: %v", err)
+	}
+	msgs, err := parseMessages(req)
 	if err != nil || len(msgs) != 1 {
 		t.Fatalf("parseMessages = %v, %v; want one message", msgs, err)
 	}
@@ -58,8 +63,8 @@ func TestFamilyRequest(t *testing.T) {
 }
 
 func TestParseFamilyID(t *testing.T) {
-	reply := genlReply(t, ctrlCmdNewFamily, stringAttr(ctrlAttrFamilyName, "ethtool"),
-		encodeAttr(ctrlAttrFamilyID, binary.NativeEndian.AppendUint16(nil, 0x1b)))
+	reply := genlReply(t, ctrlCmdNewFamily, testStringAttr(t, ctrlAttrFamilyName, "ethtool"),
+		testAttr(t, ctrlAttrFamilyID, binary.NativeEndian.AppendUint16(nil, 0x1b)))
 	if id, err := parseFamilyID(reply); err != nil || id != 0x1b {
 		t.Errorf("parseFamilyID = %#x, %v; want 0x1b", id, err)
 	}
@@ -73,13 +78,17 @@ func TestParseFamilyID(t *testing.T) {
 	if id, err := parseFamilyID(errorReply(t, -1)); !errors.Is(err, syscall.EPERM) {
 		t.Errorf("parseFamilyID(EPERM) = %#x, %v; want EPERM", id, err)
 	}
-	if id, err := parseFamilyID(genlReply(t, ctrlCmdNewFamily, stringAttr(ctrlAttrFamilyName, "ethtool"))); err == nil {
+	if id, err := parseFamilyID(genlReply(t, ctrlCmdNewFamily, testStringAttr(t, ctrlAttrFamilyName, "ethtool"))); err == nil {
 		t.Errorf("parseFamilyID without a family id = %#x, nil; want an error", id)
 	}
 }
 
 func TestRequest(t *testing.T) {
-	msgs, err := parseMessages(request(0x1b, ethtoolMsgFeaturesGet, 9, 4, "eth4"))
+	req, err := request(0x1b, ethtoolMsgFeaturesGet, 9, 4, "eth4")
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	msgs, err := parseMessages(req)
 	if err != nil || len(msgs) != 1 {
 		t.Fatalf("parseMessages = %v, %v; want one message", msgs, err)
 	}
@@ -144,11 +153,11 @@ func TestReplyError(t *testing.T) {
 
 func TestParseFeatures(t *testing.T) {
 	reply := genlReply(t, ethtoolMsgFeaturesGetReply,
-		encodeNested(ethtoolAHeader, u32Attr(ethtoolAHeaderDevIndex, 4)),
-		verboseBitset(ethtoolAFeaturesHW, true, testBit{index: 1, name: "rx-checksum"}, testBit{index: 2, name: "rx-gro-hw"}),
-		verboseBitset(ethtoolAFeaturesWanted, true, testBit{index: 1, name: "rx-checksum"}),
-		verboseBitset(ethtoolAFeaturesActive, true, testBit{index: 1, name: "rx-checksum"}, testBit{index: 3, name: "tx-checksum-ip-generic"}),
-		verboseBitset(ethtoolAFeaturesNochange, true, testBit{index: 3, name: "tx-checksum-ip-generic"}),
+		testNested(t, ethtoolAHeader, u32Attr(ethtoolAHeaderDevIndex, 4)),
+		verboseBitset(t, ethtoolAFeaturesHW, true, testBit{index: 1, name: "rx-checksum"}, testBit{index: 2, name: "rx-gro-hw"}),
+		verboseBitset(t, ethtoolAFeaturesWanted, true, testBit{index: 1, name: "rx-checksum"}),
+		verboseBitset(t, ethtoolAFeaturesActive, true, testBit{index: 1, name: "rx-checksum"}, testBit{index: 3, name: "tx-checksum-ip-generic"}),
+		verboseBitset(t, ethtoolAFeaturesNochange, true, testBit{index: 3, name: "tx-checksum-ip-generic"}),
 		u32Attr(99, 1), // an attribute a newer kernel might add
 	)
 	got, err := parseFeatures(reply)
@@ -169,7 +178,7 @@ func TestParseFeaturesErrors(t *testing.T) {
 	if got, err := parseFeatures(errorReply(t, -95)); !errors.Is(err, ErrNotSupported) {
 		t.Errorf("parseFeatures(EOPNOTSUPP) = %v, %v; want ErrNotSupported", got, err)
 	}
-	compact := encodeNested(ethtoolAFeaturesActive, encodeAttr(bitsetNomask, nil), u32Attr(bitsetSize, 32), encodeAttr(bitsetValue, []byte{1, 0, 0, 0}))
+	compact := testNested(t, ethtoolAFeaturesActive, testAttr(t, bitsetNomask, nil), u32Attr(bitsetSize, 32), testAttr(t, bitsetValue, []byte{1, 0, 0, 0}))
 	if got, err := parseFeatures(genlReply(t, ethtoolMsgFeaturesGetReply, compact)); err == nil {
 		t.Errorf("parseFeatures(compact) = %v, nil; want an error", got)
 	}
@@ -183,17 +192,17 @@ func TestParseFeaturesErrors(t *testing.T) {
 
 func TestParseLinkModes(t *testing.T) {
 	reply := genlReply(t, ethtoolMsgLinkModesGetReply,
-		encodeNested(ethtoolAHeader, u32Attr(ethtoolAHeaderDevIndex, 4)),
-		u8Attr(ethtoolALinkModesAutoneg, 0),
-		verboseBitset(ethtoolALinkModesOurs, false,
+		testNested(t, ethtoolAHeader, u32Attr(ethtoolAHeaderDevIndex, 4)),
+		u8Attr(t, ethtoolALinkModesAutoneg, 0),
+		verboseBitset(t, ethtoolALinkModesOurs, false,
 			testBit{index: 42, name: "10000baseCR/Full", set: true},
 			testBit{index: 31, name: "25000baseCR/Full", set: true},
 			testBit{index: 6, name: "Autoneg", set: true},
 			testBit{index: 10, name: "FIBRE"},
 		),
-		verboseBitset(ethtoolALinkModesPeer, true),
+		verboseBitset(t, ethtoolALinkModesPeer, true),
 		u32Attr(ethtoolALinkModesSpeed, 25000),
-		u8Attr(ethtoolALinkModesDuplex, 1),
+		u8Attr(t, ethtoolALinkModesDuplex, 1),
 		u32Attr(ethtoolALinkModesLanes, 1),
 		u32Attr(99, 1),
 	)
@@ -222,12 +231,12 @@ func TestParseLinkModes(t *testing.T) {
 
 func TestParseLinkModesAdvertisedSubsetAndPeer(t *testing.T) {
 	reply := genlReply(t, ethtoolMsgLinkModesGetReply,
-		u8Attr(ethtoolALinkModesAutoneg, 1),
-		verboseBitset(ethtoolALinkModesOurs, false,
+		u8Attr(t, ethtoolALinkModesAutoneg, 1),
+		verboseBitset(t, ethtoolALinkModesOurs, false,
 			testBit{index: 31, name: "25000baseCR/Full", set: true},
 			testBit{index: 42, name: "10000baseCR/Full"},
 		),
-		verboseBitset(ethtoolALinkModesPeer, true, testBit{index: 13, name: "Pause"}, testBit{index: 31, name: "25000baseCR/Full"}),
+		verboseBitset(t, ethtoolALinkModesPeer, true, testBit{index: 13, name: "Pause"}, testBit{index: 31, name: "25000baseCR/Full"}),
 	)
 	var l Link
 	if err := parseLinkModes(reply, &l); err != nil {
@@ -250,7 +259,7 @@ func TestParseLinkModesAdvertisedSubsetAndPeer(t *testing.T) {
 func TestParseLinkModesUnknowns(t *testing.T) {
 	reply := genlReply(t, ethtoolMsgLinkModesGetReply,
 		u32Attr(ethtoolALinkModesSpeed, speedUnknown),
-		u8Attr(ethtoolALinkModesDuplex, duplexUnknown),
+		u8Attr(t, ethtoolALinkModesDuplex, duplexUnknown),
 	)
 	var l Link
 	if err := parseLinkModes(reply, &l); err != nil {
@@ -263,7 +272,7 @@ func TestParseLinkModesUnknowns(t *testing.T) {
 		t.Errorf("mode lists = %#v/%#v/%#v, want empty, non-nil lists", l.Supported, l.Advertised, l.Partner)
 	}
 
-	half := genlReply(t, ethtoolMsgLinkModesGetReply, u8Attr(ethtoolALinkModesDuplex, 0))
+	half := genlReply(t, ethtoolMsgLinkModesGetReply, u8Attr(t, ethtoolALinkModesDuplex, 0))
 	if err := parseLinkModes(half, &l); err != nil || l.Duplex != "half" {
 		t.Errorf("parseLinkModes(DUPLEX 0) = Duplex %q, %v; want half", l.Duplex, err)
 	}
@@ -274,7 +283,7 @@ func TestParseLinkModesErrors(t *testing.T) {
 	if err := parseLinkModes(errorReply(t, -19), &l); !errors.Is(err, ErrNoDevice) {
 		t.Errorf("parseLinkModes(ENODEV) = %v, want ErrNoDevice", err)
 	}
-	if err := parseLinkModes(genlReply(t, ethtoolMsgLinkModesGetReply, encodeAttr(ethtoolALinkModesSpeed, []byte{1, 2})), &l); err == nil {
+	if err := parseLinkModes(genlReply(t, ethtoolMsgLinkModesGetReply, testAttr(t, ethtoolALinkModesSpeed, []byte{1, 2})), &l); err == nil {
 		t.Error("parseLinkModes with a 2-byte SPEED: no error")
 	}
 }
@@ -296,8 +305,8 @@ func TestParseLinkInfo(t *testing.T) {
 	}
 	for _, tt := range tests {
 		var l Link
-		reply := genlReply(t, ethtoolMsgLinkInfoGetReply, encodeNested(ethtoolAHeader, u32Attr(ethtoolAHeaderDevIndex, 4)),
-			u8Attr(ethtoolALinkInfoPort, tt.port), u8Attr(3, 0))
+		reply := genlReply(t, ethtoolMsgLinkInfoGetReply, testNested(t, ethtoolAHeader, u32Attr(ethtoolAHeaderDevIndex, 4)),
+			u8Attr(t, ethtoolALinkInfoPort, tt.port), u8Attr(t, 3, 0))
 		if err := parseLinkInfo(reply, &l); err != nil || l.Port != tt.want {
 			t.Errorf("parseLinkInfo(PORT %#x) = %q, %v; want %q", tt.port, l.Port, err, tt.want)
 		}
@@ -313,7 +322,7 @@ func TestParseLinkInfo(t *testing.T) {
 }
 
 func TestParseFEC(t *testing.T) {
-	modes := verboseBitset(ethtoolAFECModes, true, testBit{index: 49, name: "None"}, testBit{index: 50, name: "RS"})
+	modes := verboseBitset(t, ethtoolAFECModes, true, testBit{index: 49, name: "None"}, testBit{index: 50, name: "RS"})
 	tests := []struct {
 		name   string
 		active uint32
@@ -325,8 +334,8 @@ func TestParseFEC(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reply := genlReply(t, ethtoolMsgFECGetReply, encodeNested(ethtoolAHeader, u32Attr(ethtoolAHeaderDevIndex, 4)),
-				modes, u8Attr(ethtoolAFECAuto, 0), u32Attr(ethtoolAFECActive, tt.active), u32Attr(99, 1))
+			reply := genlReply(t, ethtoolMsgFECGetReply, testNested(t, ethtoolAHeader, u32Attr(ethtoolAHeaderDevIndex, 4)),
+				modes, u8Attr(t, ethtoolAFECAuto, 0), u32Attr(ethtoolAFECActive, tt.active), u32Attr(99, 1))
 			got, err := parseFEC(reply)
 			if err != nil {
 				t.Fatalf("parseFEC: %v", err)
@@ -346,7 +355,7 @@ func TestParseFEC(t *testing.T) {
 
 func TestParseFECMinimal(t *testing.T) {
 	// The kernel omits ACTIVE when no FEC mode is active; nothing configured is an empty list, not a missing one.
-	got, err := parseFEC(genlReply(t, ethtoolMsgFECGetReply, verboseBitset(ethtoolAFECModes, true), u8Attr(ethtoolAFECAuto, 1)))
+	got, err := parseFEC(genlReply(t, ethtoolMsgFECGetReply, verboseBitset(t, ethtoolAFECModes, true), u8Attr(t, ethtoolAFECAuto, 1)))
 	if err != nil {
 		t.Fatalf("parseFEC: %v", err)
 	}
@@ -360,15 +369,15 @@ func TestParseFECMinimal(t *testing.T) {
 
 func FuzzParseFeatures(f *testing.F) {
 	reply := func(cmd uint8, attrs ...[]byte) []byte {
-		return encodeMessage(0x1b, 0, 1, append([]byte{cmd, genlVersion, 0, 0}, bytes.Join(attrs, nil)...))
+		return testMessage(f, 0x1b, 0, 1, append([]byte{cmd, genlVersion, 0, 0}, bytes.Join(attrs, nil)...))
 	}
 	f.Add(reply(ethtoolMsgFeaturesGetReply,
-		verboseBitset(ethtoolAFeaturesHW, true, testBit{index: 1, name: "rx-checksum"}),
-		verboseBitset(ethtoolAFeaturesActive, false, testBit{index: 1, name: "rx-checksum", set: true})))
-	f.Add(reply(ethtoolMsgLinkModesGetReply, verboseBitset(ethtoolALinkModesOurs, false, testBit{index: 31, name: "25000baseCR/Full"}),
+		verboseBitset(f, ethtoolAFeaturesHW, true, testBit{index: 1, name: "rx-checksum"}),
+		verboseBitset(f, ethtoolAFeaturesActive, false, testBit{index: 1, name: "rx-checksum", set: true})))
+	f.Add(reply(ethtoolMsgLinkModesGetReply, verboseBitset(f, ethtoolALinkModesOurs, false, testBit{index: 31, name: "25000baseCR/Full"}),
 		u32Attr(ethtoolALinkModesSpeed, 25000)))
-	f.Add(reply(ethtoolMsgFECGetReply, verboseBitset(ethtoolAFECModes, true, testBit{index: 50, name: "RS"}), u32Attr(ethtoolAFECActive, 50)))
-	f.Add(encodeMessage(nlmsgError, 0, 1, binary.NativeEndian.AppendUint32(nil, uint32(0xffffffa1))))
+	f.Add(reply(ethtoolMsgFECGetReply, verboseBitset(f, ethtoolAFECModes, true, testBit{index: 50, name: "RS"}), u32Attr(ethtoolAFECActive, 50)))
+	f.Add(testMessage(f, nlmsgError, 0, 1, binary.NativeEndian.AppendUint32(nil, uint32(0xffffffa1))))
 	f.Add([]byte{})
 	f.Fuzz(func(t *testing.T, b []byte) {
 		msgs, err := parseMessages(b)

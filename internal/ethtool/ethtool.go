@@ -139,9 +139,12 @@ const (
 )
 
 // familyRequest asks the generic-netlink controller for the ethtool family's id.
-func familyRequest(seq uint32) []byte {
-	payload := append([]byte{ctrlCmdGetFamily, genlVersion, 0, 0}, stringAttr(ctrlAttrFamilyName, ethtoolFamilyName)...)
-	return encodeMessage(genlIDCtrl, nlmFRequest, seq, payload)
+func familyRequest(seq uint32) ([]byte, error) {
+	name, err := stringAttr(ctrlAttrFamilyName, ethtoolFamilyName)
+	if err != nil {
+		return nil, err
+	}
+	return encodeMessage(genlIDCtrl, nlmFRequest, seq, append([]byte{ctrlCmdGetFamily, genlVersion, 0, 0}, name...))
 }
 
 // parseFamilyID returns the family id from the controller's reply to familyRequest; the controller answers ENOENT for a family it does not know.
@@ -171,11 +174,16 @@ func parseFamilyID(msgs []message) (uint16, error) {
 // request returns an ethtool query of one interface. The header names it by both index and name: the kernel answers ENODEV when they do
 // not match, so an index reused by another interface since the caller read it is not answered for. Header flags of 0 ask for verbose
 // bitsets, which list each bit with its name.
-func request(family uint16, cmd uint8, seq uint32, ifindex uint32, name string) []byte {
-	header := encodeNested(ethtoolAHeader,
-		u32Attr(ethtoolAHeaderDevIndex, ifindex), stringAttr(ethtoolAHeaderDevName, name), u32Attr(ethtoolAHeaderFlags, 0))
-	payload := append([]byte{cmd, genlVersion, 0, 0}, header...)
-	return encodeMessage(family, nlmFRequest, seq, payload)
+func request(family uint16, cmd uint8, seq uint32, ifindex uint32, name string) ([]byte, error) {
+	dev, err := stringAttr(ethtoolAHeaderDevName, name)
+	if err != nil {
+		return nil, fmt.Errorf("interface name: %w", err)
+	}
+	header, err := encodeNested(ethtoolAHeader, u32Attr(ethtoolAHeaderDevIndex, ifindex), dev, u32Attr(ethtoolAHeaderFlags, 0))
+	if err != nil {
+		return nil, err
+	}
+	return encodeMessage(family, nlmFRequest, seq, append([]byte{cmd, genlVersion, 0, 0}, header...))
 }
 
 // replyError returns the first NLMSG_ERROR with a nonzero code as an error: ErrNotSupported, ErrNoDevice, or the syscall.Errno. An ACK (code 0)
