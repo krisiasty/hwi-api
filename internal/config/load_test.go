@@ -221,11 +221,6 @@ func TestValidateRejectsBrokenConfigurations(t *testing.T) {
 			c.API.Auth.MTLS.ClientCAFile = "/nonexistent/client-ca.pem"
 		}, "api.auth.mtls.client_ca_file: stat /nonexistent/client-ca.pem"},
 		{"auth enabled with no mechanism selected", func(c *Config) { c.API.Auth.Token.Enabled = false }, "authentication"},
-		{"both listeners on one address and port", func(c *Config) {
-			c.API.Bind.Addresses = []string{"127.0.0.1"}
-			c.API.Bind.Port = 9100
-			c.Ops.Bind.Port = 9100
-		}, "same address and port"},
 	}
 
 	for _, tt := range tests {

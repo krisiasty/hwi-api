@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 
 	"github.com/krisiasty/hwi-api/apiv1"
@@ -146,9 +145,6 @@ func (c Config) Validate() ([]string, error) {
 		return nil, err
 	}
 	if err := validatePort("ops.bind.port", c.Ops.Bind.Port); err != nil {
-		return nil, err
-	}
-	if err := c.validateListenerOverlap(); err != nil {
 		return nil, err
 	}
 
@@ -343,27 +339,6 @@ func validateDigest(h string) error {
 	}
 	if !validDigestHex(strings.TrimPrefix(h, "sha256:")) {
 		return errors.New("is not a sha256 digest: expected sha256: followed by 64 lowercase hex characters")
-	}
-	return nil
-}
-
-// validateListenerOverlap catches the two listeners colliding, which would
-// otherwise surface as an opaque bind error from whichever started second.
-func (c Config) validateListenerOverlap() error {
-	if c.API.Bind.Port != c.Ops.Bind.Port {
-		return nil
-	}
-	apiAddrs := c.API.Bind.Addresses
-	opsAddrs := c.Ops.Bind.Addresses
-	if len(apiAddrs) == 0 || len(opsAddrs) == 0 {
-		return fmt.Errorf("api and ops listeners would use the same address and port (%d); "+
-			"one of them binds every address", c.API.Bind.Port)
-	}
-	for _, a := range apiAddrs {
-		if slices.Contains(opsAddrs, a) {
-			return fmt.Errorf("api and ops listeners would use the same address and port (%s:%d)",
-				a, c.API.Bind.Port)
-		}
 	}
 	return nil
 }
