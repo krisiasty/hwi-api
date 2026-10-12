@@ -131,7 +131,7 @@ type pciSources struct {
 // file system, nil without the helper; cache is the prober's own, kept
 // across its probes.
 func newPCISources(root fs.FS, db *pciids.DB, privileged fs.FS, cache *vpdCache) pciSources {
-	src := pciSources{root: root, db: db, slots: pciSlots(root), vpd: &vpdReader{privileged: privileged, cache: cache}}
+	src := pciSources{root: root, db: db, slots: pciSlots(root), vpd: &vpdReader{privileged: privileged, cache: cache, cached: cache.snapshot()}}
 	if table, err := readSMBIOSTable(privileged); err == nil {
 		if slots, err := systemSlots(table); err == nil {
 			for _, s := range slots {
@@ -164,6 +164,7 @@ func NewPCIProber(rootFS fs.FS, db *pciids.DB, privileged fs.FS) Prober {
 				out.Devices = append(out.Devices, d)
 			}
 		}
+		src.vpd.commit(out.Devices)
 		return out, nil
 	})
 }
@@ -227,7 +228,7 @@ func (src pciSources) readDevice(address string) (PCIDevice, bool) {
 	// The vpd file is root-only, but its existence is not: the daemon may
 	// look, and asks the helper to read.
 	if _, err := fs.Stat(src.root, dir+"/vpd"); err == nil {
-		card := pciCard{address: address, vendor: vendor, device: product, subVendor: subVendor, subDevice: subID}
+		card := pciCardOf(d)
 		asleep := d.PowerState == "D3cold" || readOptional(fsys, dir+"/power/runtime_status") == "suspended"
 		d.VPD, d.VPDError = src.vpd.read(card, asleep)
 	}
@@ -238,14 +239,48 @@ func (src pciSources) readDevice(address string) (PCIDevice, bool) {
 }
 
 // pciCard identifies the card at an address: a VPD read from it is reported
-// again only while the same card is there.
+// again only while the same card is there. Its IDs name the card's model,
+// not the card, so the prober also forgets an address's VPD whenever a
+// probe sees the card go (vpdCache.update). A same-model swap between two
+// probes is beyond it until a probe reads the new card's VPD: nothing
+// sysfs offers without waking the card tells them apart.
 type pciCard struct {
 	address, vendor, device, subVendor, subDevice string
 }
 
+// identified reports whether every one of the card's IDs could be read. A
+// card with an unreadable ID cannot be told from another such card by its
+// IDs, so they do not match a cached card, and what is read from it is not
+// cached.
+func (c pciCard) identified() bool {
+	return c.vendor != unknown && c.device != unknown && c.subVendor != unknown && c.subDevice != unknown
+}
+
+// contradicts reports whether c is shown to be another card than cached
+// at the same address: one of its IDs that could be read differs. An
+// unreadable ID is no evidence either way, but it does not cancel the
+// evidence of the others.
+func (c pciCard) contradicts(cached pciCard) bool {
+	differs := func(seen, was string) bool { return seen != unknown && seen != was }
+	return differs(c.vendor, cached.vendor) || differs(c.device, cached.device) ||
+		differs(c.subVendor, cached.subVendor) || differs(c.subDevice, cached.subDevice)
+}
+
+// pciCardOf is the card a probe reported d as.
+func pciCardOf(d PCIDevice) pciCard {
+	return pciCard{address: d.Address, vendor: d.Vendor.ID, device: d.Product.ID, subVendor: d.Subsystem.VendorID, subDevice: d.Subsystem.ID}
+}
+
 // vpdCache keeps, for each address, the VPD last read from the card there
-// while it was awake. It is a prober's own, kept across its probes, and
-// safe for concurrent probes.
+// while it was awake, until a probe sees the card go: the address empty,
+// another model there, or the card's own VPD gone, unreadable or naming
+// another card. Nothing else forgets it: a read the helper skipped or
+// failed, or an ID or vpd file that could not be read, says nothing about
+// the card. Each probe reads one snapshot and replaces the map when it
+// ends, never changing a map once published, so the two are safe for
+// concurrent use; but a probe's evidence is only as current as its
+// listing, so the prober's probes must not overlap, as the Refresher's
+// per-subsystem slot ensures.
 type vpdCache struct {
 	mu   sync.Mutex
 	last map[string]cachedVPD
@@ -256,25 +291,38 @@ type cachedVPD struct {
 	vpd  *PCIVPD
 }
 
-func newVPDCache() *vpdCache { return &vpdCache{last: map[string]cachedVPD{}} }
+func newVPDCache() *vpdCache { return &vpdCache{} }
 
-// get is the VPD last read from card, if it was read from this very card.
-func (c *vpdCache) get(card pciCard) (*PCIVPD, bool) {
+// snapshot is the cache as it stands, for one probe to read.
+func (c *vpdCache) snapshot() map[string]cachedVPD {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e, ok := c.last[card.address]
-	return e.vpd, ok && e.card == card
+	return c.last
 }
 
-// set records v as card's VPD, or, when v is nil, forgets the card's.
-func (c *vpdCache) set(card pciCard, v *PCIVPD) {
+// update applies one probe's evidence. present is the card the probe
+// reported at each address, fresh the VPD it read from identified cards,
+// and gone the addresses whose card's own VPD showed it has gone. A cached
+// card is forgotten when its address is not present, holds a card whose
+// readable IDs contradict it, or is gone; a fresh read is kept only for a card the probe reported, not
+// for one removed while it was read.
+func (c *vpdCache) update(present map[string]pciCard, fresh map[string]cachedVPD, gone map[string]bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if v == nil {
-		delete(c.last, card.address)
-		return
+	next := make(map[string]cachedVPD, len(c.last)+len(fresh))
+	for address, e := range c.last {
+		card, ok := present[address]
+		if !ok || gone[address] || card.contradicts(e.card) {
+			continue
+		}
+		next[address] = e
 	}
-	c.last[card.address] = cachedVPD{card: card, vpd: v}
+	for address, e := range fresh {
+		if present[address] == e.card {
+			next[address] = e
+		}
+	}
+	c.last = next
 }
 
 // vpdReader reads the devices' VPD through privileged, the helper's file
@@ -282,6 +330,13 @@ func (c *vpdCache) set(card pciCard, v *PCIVPD) {
 type vpdReader struct {
 	privileged fs.FS
 	cache      *vpdCache
+	// cached is the cache as the probe began, which it never changes.
+	cached map[string]cachedVPD
+	// fresh and gone are what the probe has learnt, for commit: the VPD
+	// read from identified cards, and the addresses whose card's own VPD
+	// showed it has gone. Both stay nil until needed.
+	fresh map[string]cachedVPD
+	gone  map[string]bool
 	// failed is this probe's first VPD read that the helper did not answer,
 	// or answered as hung. Each such read costs up to the client's timeout,
 	// and one faulty card or a missing helper would cost it again for every
@@ -293,40 +348,89 @@ type vpdReader struct {
 // read returns the VPD of card, or why there is none. A device that is
 // asleep, runtime-suspended or in D3cold, is not read: the kernel resumes
 // it, and its port, for a VPD read, so a timed probe would keep waking idle
-// cards. It reports the VPD last read from it while awake instead, if any.
+// cards. It reports the VPD last read from it while awake instead, if any
+// and if its IDs show it is the same card.
 func (r *vpdReader) read(card pciCard, asleep bool) (*PCIVPD, string) {
 	if r.privileged == nil {
 		return nil, "the privileged helper is not configured"
 	}
+	cached, ok := r.cached[card.address]
 	if asleep {
-		if v, ok := r.cache.get(card); ok {
-			return v, ""
+		if ok && card.identified() && cached.card == card {
+			return cached.vpd, ""
 		}
 		return nil, "not read: the device is powered down, and reading its VPD would wake it"
 	}
 	if r.failed != nil {
 		return nil, fmt.Sprintf("not read: an earlier VPD read in this refresh failed (%v)", r.failed)
 	}
-	v, why := r.readHelper(card.address)
-	r.cache.set(card, v)
+	v, why, cardFault := r.readHelper(card.address)
+	switch {
+	case cardFault:
+		r.markGone(card.address)
+	case v == nil:
+		// The helper failed, which says nothing about the card.
+	case card.identified():
+		if r.fresh == nil {
+			r.fresh = map[string]cachedVPD{}
+		}
+		r.fresh[card.address] = cachedVPD{card: card, vpd: v}
+	case ok && !sameVPDCard(v, cached.vpd):
+		// The IDs cannot say which card this is, but its VPD names
+		// another card than the cached one.
+		r.markGone(card.address)
+	}
 	return v, why
 }
 
+func (r *vpdReader) markGone(address string) {
+	if r.gone == nil {
+		r.gone = map[string]bool{}
+	}
+	r.gone[address] = true
+}
+
+// commit applies what this probe learnt, given the devices it reported.
+// With nothing cached and nothing read, as on a host without the helper or
+// without VPD, it does nothing.
+func (r *vpdReader) commit(devices []PCIDevice) {
+	if len(r.cached) == 0 && len(r.fresh) == 0 {
+		return
+	}
+	present := make(map[string]pciCard, len(devices))
+	for _, d := range devices {
+		present[d.Address] = pciCardOf(d)
+	}
+	r.cache.update(present, r.fresh, r.gone)
+}
+
+// sameVPDCard reports whether two VPDs name the same card: the same serial
+// and part numbers. The other keywords do not count, the read-write ones
+// least, since a card can rewrite them itself. Two cards with neither
+// number cannot be told apart this way, as two of a model cannot by IDs.
+func sameVPDCard(a, b *PCIVPD) bool {
+	return a.SerialNumber == b.SerialNumber && a.PartNumber == b.PartNumber
+}
+
 // readHelper asks the helper for the VPD at address and decodes it.
-func (r *vpdReader) readHelper(address string) (*PCIVPD, string) {
+// cardFault reports a failure that is the card's own, its VPD gone,
+// unreadable or malformed, rather than the helper's, which says nothing
+// about the card.
+func (r *vpdReader) readHelper(address string) (v *PCIVPD, why string, cardFault bool) {
 	b, err := fs.ReadFile(r.privileged, "vpd/"+address)
 	if err != nil {
 		var answer *helper.AnswerError
 		if errors.Is(err, helper.ErrUnavailable) || (errors.As(err, &answer) && answer.Code == helper.ErrCodeTimeout) {
 			r.failed = err
+			return nil, "reading the VPD: " + err.Error(), false
 		}
-		return nil, "reading the VPD: " + err.Error()
+		return nil, "reading the VPD: " + err.Error(), true
 	}
-	v, err := parseVPD(b)
+	v, err = parseVPD(b)
 	if err != nil {
-		return nil, "decoding the VPD: " + err.Error()
+		return nil, "decoding the VPD: " + err.Error(), true
 	}
-	return v, ""
+	return v, "", false
 }
 
 // pciDeviceExists reports whether the device directory dir is still there.

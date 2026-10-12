@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"maps"
 	"path"
 	"slices"
 	"strings"
@@ -670,7 +671,10 @@ func TestPCIProberDummyHostBridgeTakesNoSlot(t *testing.T) {
 }
 
 // connectXDir is the ConnectX physical function's directory in pciHost.
-const connectXDir = "sys/devices/pci0000:3a/0000:3a:00.0/0000:3b:00.0"
+const (
+	connectXDir   = "sys/devices/pci0000:3a/0000:3a:00.0/0000:3b:00.0"
+	connectXVFDir = "sys/devices/pci0000:3a/0000:3a:00.0/0000:3b:00.2"
+)
 
 // vpdHelper is a helper file system answering each VPD request with answer,
 // and every other request, the SMBIOS table's, as a file the host lacks. It
@@ -708,6 +712,32 @@ func TestPCIProberDoesNotWakeAPoweredDownDevice(t *testing.T) {
 	}
 }
 
+// vpdProbes returns a function that runs the next probe of one prober of
+// m, so its VPD cache carries over from probe to probe.
+func vpdProbes(t *testing.T, m fs.FS, privileged fs.FS) func() *PCI {
+	prober := NewPCIProber(m, testDB(t), privileged)
+	return func() *PCI {
+		t.Helper()
+		v, err := prober.Probe(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.(*PCI)
+	}
+}
+
+// setConnectX writes one of the ConnectX card's sysfs files.
+func setConnectX(m fstest.MapFS, name, value string) {
+	m[connectXDir+"/"+name] = &fstest.MapFile{Data: []byte(value + "\n")}
+}
+
+// mlxHelper answers every VPD request with the ConnectX card's VPD.
+func mlxHelper() (fs.FS, *int) {
+	return vpdHelper(func(helper.Request) (helper.Response, error) {
+		return helper.Response{Data: mlxVPD()}, nil
+	})
+}
+
 // A powered-down device reports the VPD the prober last read from it while
 // it was awake, unless a different card now sits at its address or its last
 // read failed.
@@ -721,25 +751,17 @@ func TestPCIProberReportsTheVPDLastReadWhileAwake(t *testing.T) {
 		}
 		return answer, nil
 	})
-	prober := NewPCIProber(m, testDB(t), privileged)
-	probe := func() PCIDevice {
-		t.Helper()
-		v, err := prober.Probe(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
-		return pciDevice(t, v.(*PCI), "0000:3b:00.0")
-	}
+	probe := vpdProbes(t, m, privileged)
 	setStatus := func(status string) {
 		asleep = status == "suspended"
-		m[connectXDir+"/power/runtime_status"] = &fstest.MapFile{Data: []byte(status + "\n")}
+		setConnectX(m, "power/runtime_status", status)
 	}
 
-	if d := probe(); d.VPD == nil || d.VPDError != "" {
+	if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD == nil || d.VPDError != "" {
 		t.Fatalf("awake: vpd %+v, vpd_error %q", d.VPD, d.VPDError)
 	}
 	setStatus("suspended")
-	if d := probe(); d.VPDError != "" || d.VPD == nil || d.VPD.SerialNumber != "MT2140X12345" {
+	if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPDError != "" || d.VPD == nil || d.VPD.SerialNumber != "MT2140X12345" {
 		t.Errorf("suspended after a read: vpd %+v, vpd_error %q; want the VPD read while awake", d.VPD, d.VPDError)
 	}
 	if *asked != 1 {
@@ -747,21 +769,420 @@ func TestPCIProberReportsTheVPDLastReadWhileAwake(t *testing.T) {
 	}
 
 	// A different card at the address does not inherit the VPD.
-	m[connectXDir+"/device"] = &fstest.MapFile{Data: []byte("0x101f\n")}
-	if d := probe(); d.VPD != nil || d.VPDError != vpdPoweredDown {
+	setConnectX(m, "device", "0x101f")
+	if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD != nil || d.VPDError != vpdPoweredDown {
 		t.Errorf("another card: vpd %+v, vpd_error %q; want none and %q", d.VPD, d.VPDError, vpdPoweredDown)
 	}
-	m[connectXDir+"/device"] = &fstest.MapFile{Data: []byte("0x101d\n")}
+	setConnectX(m, "device", "0x101d")
 
 	// A failed read of the awake device forgets its VPD.
 	setStatus("active")
 	answer = helper.Response{Error: helper.ErrCodeRead, Message: "input/output error"}
-	if d := probe(); d.VPD != nil || !strings.Contains(d.VPDError, "read_failed") {
+	if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD != nil || !strings.Contains(d.VPDError, "read_failed") {
 		t.Errorf("failed read: vpd %+v, vpd_error %q", d.VPD, d.VPDError)
 	}
 	setStatus("suspended")
-	if d := probe(); d.VPD != nil || d.VPDError != vpdPoweredDown {
+	if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD != nil || d.VPDError != vpdPoweredDown {
 		t.Errorf("suspended after a failed read: vpd %+v, vpd_error %q; want none and %q", d.VPD, d.VPDError, vpdPoweredDown)
+	}
+}
+
+// PCI IDs name a card's model, not the card: a replacement of the same
+// model at the same address must not inherit the removed card's VPD. A
+// probe that finds the address empty forgets what was read there, so the
+// replacement, found powered down, is reported unread rather than with the
+// removed card's serial number.
+func TestPCIProberForgetsTheVPDOfARemovedCard(t *testing.T) {
+	m := withVPD()
+	privileged, asked := mlxHelper()
+	probe := vpdProbes(t, m, privileged)
+
+	if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD == nil || d.VPD.SerialNumber != "MT2140X12345" {
+		t.Fatalf("awake: vpd %+v, vpd_error %q", d.VPD, d.VPDError)
+	}
+
+	// Unplug the card: the listing entries and device directories of its
+	// physical function and of its VF, which the kernel removes with it,
+	// go.
+	card := fstest.MapFS{}
+	for name, f := range m {
+		for _, dir := range []string{connectXDir, connectXVFDir} {
+			if name == pciDeviceDir(path.Base(dir)) || strings.HasPrefix(name, dir+"/") {
+				card[name] = f
+				delete(m, name)
+			}
+		}
+	}
+	for _, d := range probe().Devices {
+		if strings.HasPrefix(d.Address, "0000:3b:") {
+			t.Fatalf("the unplugged card is still listed: %+v", d)
+		}
+	}
+
+	// A card of the same model goes in at the same address, and is
+	// suspended by the next probe.
+	maps.Copy(m, card)
+	setConnectX(m, "power/runtime_status", "suspended")
+	if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD != nil || d.VPDError != vpdPoweredDown {
+		t.Errorf("replacement: vpd %+v, vpd_error %q; want none and %q", d.VPD, d.VPDError, vpdPoweredDown)
+	}
+	if *asked != 1 {
+		t.Errorf("the helper was asked %d times, want once: the replacement must not be woken", *asked)
+	}
+}
+
+// A refresh that finds another model at the address has seen the card go,
+// so a later card of the first model, found powered down, must not get the
+// first card's VPD back.
+func TestPCIProberForgetsTheVPDOfACardSeenReplacedByAnotherModel(t *testing.T) {
+	m := withVPD()
+	privileged, asked := mlxHelper()
+	probe := vpdProbes(t, m, privileged)
+
+	if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD == nil || d.VPD.SerialNumber != "MT2140X12345" {
+		t.Fatalf("awake: vpd %+v, vpd_error %q", d.VPD, d.VPDError)
+	}
+	setConnectX(m, "power/runtime_status", "suspended")
+	setConnectX(m, "device", "0x101f")
+	if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD != nil || d.VPDError != vpdPoweredDown {
+		t.Errorf("another model: vpd %+v, vpd_error %q; want none and %q", d.VPD, d.VPDError, vpdPoweredDown)
+	}
+	setConnectX(m, "device", "0x101d")
+	if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD != nil || d.VPDError != vpdPoweredDown {
+		t.Errorf("the first model again: vpd %+v, vpd_error %q; want none and %q", d.VPD, d.VPDError, vpdPoweredDown)
+	}
+	if *asked != 1 {
+		t.Errorf("the helper was asked %d times, want once", *asked)
+	}
+}
+
+// Seeing another model at the address proves the card has gone even when
+// that model has no VPD of its own, and so is never looked up in the
+// cache: a later card of the first model, found powered down, must still
+// not get the first card's VPD back.
+func TestPCIProberForgetsTheVPDOfACardSeenReplacedByAModelWithoutVPD(t *testing.T) {
+	for _, between := range []string{"active", "suspended"} {
+		t.Run(between, func(t *testing.T) {
+			m := withVPD()
+			privileged, asked := mlxHelper()
+			probe := vpdProbes(t, m, privileged)
+
+			if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD == nil || d.VPD.SerialNumber != "MT2140X12345" {
+				t.Fatalf("awake: vpd %+v, vpd_error %q", d.VPD, d.VPDError)
+			}
+
+			// Another model, with no VPD at all.
+			vpd := m[connectXDir+"/vpd"]
+			delete(m, connectXDir+"/vpd")
+			setConnectX(m, "device", "0x101f")
+			setConnectX(m, "power/runtime_status", between)
+			if d := pciDevice(t, probe(), "0000:3b:00.0"); d.Product.ID != "101f" || d.VPD != nil || d.VPDError != "" {
+				t.Fatalf("model without VPD: product %q, vpd %+v, vpd_error %q", d.Product.ID, d.VPD, d.VPDError)
+			}
+
+			// A card of the first model again, powered down.
+			m[connectXDir+"/vpd"] = vpd
+			setConnectX(m, "device", "0x101d")
+			setConnectX(m, "power/runtime_status", "suspended")
+			if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD != nil || d.VPDError != vpdPoweredDown {
+				t.Errorf("the first model again: vpd %+v, vpd_error %q; want none and %q", d.VPD, d.VPDError, vpdPoweredDown)
+			}
+			if *asked != 1 {
+				t.Errorf("the helper was asked %d times, want once", *asked)
+			}
+		})
+	}
+}
+
+// A card found awake but not read, because an earlier VPD read in the
+// refresh failed, keeps the VPD read from it: a failed read elsewhere says
+// nothing about this card, and a helper restart, or one card whose read
+// always hangs, must not cost every card after it its VPD once it powers
+// down. (A same-model swap that no refresh reads is the documented limit.)
+func TestPCIProberKeepsTheVPDOfACardItSkipped(t *testing.T) {
+	m := withVPD()
+	// The onboard NIC sorts before the ConnectX card, so its read comes
+	// first in every refresh.
+	m["sys/devices/pci0000:00/0000:00:1f.6/vpd"] = &fstest.MapFile{Mode: 0o600}
+	hang := false
+	connectXReads := 0
+	privileged, _ := vpdHelper(func(req helper.Request) (helper.Response, error) {
+		if req.Address == "0000:00:1f.6" {
+			if hang {
+				return helper.Response{Error: helper.ErrCodeTimeout, Message: "the read did not finish in time"}, nil
+			}
+			return helper.Response{Error: helper.ErrCodeNotFound}, nil
+		}
+		connectXReads++
+		return helper.Response{Data: mlxVPD()}, nil
+	})
+	probe := vpdProbes(t, m, privileged)
+
+	if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD == nil || d.VPD.SerialNumber != "MT2140X12345" {
+		t.Fatalf("awake: vpd %+v, vpd_error %q", d.VPD, d.VPDError)
+	}
+	// The card is awake, and not read because the onboard NIC's read hangs.
+	hang = true
+	if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD != nil || !strings.Contains(d.VPDError, "an earlier VPD read in this refresh failed") {
+		t.Errorf("skipped: vpd %+v, vpd_error %q", d.VPD, d.VPDError)
+	}
+	setConnectX(m, "power/runtime_status", "suspended")
+	if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPDError != "" || d.VPD == nil || d.VPD.SerialNumber != "MT2140X12345" {
+		t.Errorf("powered down after a skipped read: vpd %+v, vpd_error %q; want the VPD read while awake", d.VPD, d.VPDError)
+	}
+	if connectXReads != 1 {
+		t.Errorf("the ConnectX card was read %d times, want once", connectXReads)
+	}
+}
+
+// IDs that cannot be read are no evidence that the card has gone: a
+// refresh that cannot read them reports a powered-down card unread, since
+// it cannot tell which card it is, but keeps the VPD for the refreshes
+// that can. Found awake, the card is read, and keeps the cached VPD when
+// it reads the same.
+func TestPCIProberKeepsTheVPDOfACardWhoseIDsCannotBeRead(t *testing.T) {
+	for status, wantReads := range map[string]int{"suspended": 1, "active": 2} {
+		t.Run(status, func(t *testing.T) {
+			m := withVPD()
+			privileged, asked := mlxHelper()
+			probe := vpdProbes(t, m, privileged)
+
+			if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD == nil || d.VPD.SerialNumber != "MT2140X12345" {
+				t.Fatalf("awake: vpd %+v, vpd_error %q", d.VPD, d.VPDError)
+			}
+			subsystem := m[connectXDir+"/subsystem_device"]
+			setConnectX(m, "subsystem_device", "garbage")
+			setConnectX(m, "power/runtime_status", status)
+			d := pciDevice(t, probe(), "0000:3b:00.0")
+			if d.Subsystem.ID != unknown {
+				t.Fatalf("subsystem id %q, want %q", d.Subsystem.ID, unknown)
+			}
+			if status == "suspended" && (d.VPD != nil || d.VPDError != vpdPoweredDown) {
+				t.Errorf("unreadable ids, powered down: vpd %+v, vpd_error %q; want none and %q", d.VPD, d.VPDError, vpdPoweredDown)
+			}
+			if status == "active" && (d.VPD == nil || d.VPDError != "") {
+				t.Errorf("unreadable ids, awake: vpd %+v, vpd_error %q; want the VPD read now", d.VPD, d.VPDError)
+			}
+
+			m[connectXDir+"/subsystem_device"] = subsystem
+			setConnectX(m, "power/runtime_status", "suspended")
+			if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPDError != "" || d.VPD == nil || d.VPD.SerialNumber != "MT2140X12345" {
+				t.Errorf("ids readable again, powered down: vpd %+v, vpd_error %q; want the VPD read while awake", d.VPD, d.VPDError)
+			}
+			if *asked != wantReads {
+				t.Errorf("the helper was asked %d times, want %d", *asked, wantReads)
+			}
+		})
+	}
+}
+
+// A card whose IDs cannot be read cannot be told from another card whose
+// IDs cannot be read either, so what is read from it is never cached.
+func TestPCIProberNeverCachesTheVPDOfACardWhoseIDsCannotBeRead(t *testing.T) {
+	m := withVPD()
+	privileged, asked := mlxHelper()
+	probe := vpdProbes(t, m, privileged)
+	for _, name := range []string{"vendor", "device", "subsystem_vendor", "subsystem_device"} {
+		setConnectX(m, name, "garbage")
+	}
+
+	if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD == nil || d.VPDError != "" {
+		t.Fatalf("awake: vpd %+v, vpd_error %q", d.VPD, d.VPDError)
+	}
+	setConnectX(m, "power/runtime_status", "suspended")
+	if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD != nil || d.VPDError != vpdPoweredDown {
+		t.Errorf("powered down: vpd %+v, vpd_error %q; want none and %q", d.VPD, d.VPDError, vpdPoweredDown)
+	}
+	if *asked != 1 {
+		t.Errorf("the helper was asked %d times, want once", *asked)
+	}
+}
+
+// The helper failing on the card's own read, unavailable or timed out,
+// says no more about the card than a read skipped after it fails on
+// another: the card keeps the VPD read from it.
+func TestPCIProberKeepsTheVPDOfACardWhoseOwnReadTheHelperFailed(t *testing.T) {
+	for name, fail := range map[string]func() (helper.Response, error){
+		"read hung": func() (helper.Response, error) {
+			return helper.Response{Error: helper.ErrCodeTimeout, Message: "the read did not finish in time"}, nil
+		},
+		"helper down": func() (helper.Response, error) {
+			return helper.Response{}, fmt.Errorf("%w: connect: connection refused", helper.ErrUnavailable)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := withVPD()
+			failing := false
+			privileged, _ := vpdHelper(func(helper.Request) (helper.Response, error) {
+				if failing {
+					return fail()
+				}
+				return helper.Response{Data: mlxVPD()}, nil
+			})
+			probe := vpdProbes(t, m, privileged)
+
+			if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD == nil || d.VPD.SerialNumber != "MT2140X12345" {
+				t.Fatalf("awake: vpd %+v, vpd_error %q", d.VPD, d.VPDError)
+			}
+			failing = true
+			if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD != nil || d.VPDError == "" {
+				t.Errorf("helper failed: vpd %+v, vpd_error %q", d.VPD, d.VPDError)
+			}
+			setConnectX(m, "power/runtime_status", "suspended")
+			if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPDError != "" || d.VPD == nil || d.VPD.SerialNumber != "MT2140X12345" {
+				t.Errorf("powered down after the helper failed: vpd %+v, vpd_error %q; want the VPD read while awake", d.VPD, d.VPDError)
+			}
+		})
+	}
+}
+
+// An unreadable ID says nothing either way, but the IDs that can be read
+// still do: another device ID with the subsystem ID unreadable is another
+// model, and the cached VPD must not outlive it.
+func TestPCIProberForgetsTheVPDOfACardSeenReplacedByAModelWithAnUnreadableID(t *testing.T) {
+	for _, between := range []string{"suspended", "skipped"} {
+		t.Run(between, func(t *testing.T) {
+			m := withVPD()
+			// The onboard NIC sorts first; once hang is set, its read times
+			// out and every later read in the refresh is skipped.
+			m["sys/devices/pci0000:00/0000:00:1f.6/vpd"] = &fstest.MapFile{Mode: 0o600}
+			hang := false
+			privileged, _ := vpdHelper(func(req helper.Request) (helper.Response, error) {
+				if req.Address == "0000:00:1f.6" {
+					if hang {
+						return helper.Response{Error: helper.ErrCodeTimeout, Message: "the read did not finish in time"}, nil
+					}
+					return helper.Response{Error: helper.ErrCodeNotFound}, nil
+				}
+				return helper.Response{Data: mlxVPD()}, nil
+			})
+			probe := vpdProbes(t, m, privileged)
+
+			if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD == nil || d.VPD.SerialNumber != "MT2140X12345" {
+				t.Fatalf("awake: vpd %+v, vpd_error %q", d.VPD, d.VPDError)
+			}
+
+			// Another model, its subsystem ID unreadable, and not read.
+			subsystem := m[connectXDir+"/subsystem_device"]
+			setConnectX(m, "device", "0x101f")
+			setConnectX(m, "subsystem_device", "garbage")
+			if between == "suspended" {
+				setConnectX(m, "power/runtime_status", "suspended")
+			} else {
+				hang = true
+			}
+			if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD != nil {
+				t.Fatalf("another model: vpd %+v", d.VPD)
+			}
+
+			// A card of the first model again, fully identified, powered down.
+			hang = false
+			setConnectX(m, "device", "0x101d")
+			m[connectXDir+"/subsystem_device"] = subsystem
+			setConnectX(m, "power/runtime_status", "suspended")
+			if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD != nil || d.VPDError != vpdPoweredDown {
+				t.Errorf("the first model again: vpd %+v, vpd_error %q; want none and %q", d.VPD, d.VPDError, vpdPoweredDown)
+			}
+		})
+	}
+}
+
+// A card whose IDs cannot be read is told from the cached card by the
+// identity in its VPD, its serial and part numbers. Its read-write
+// keywords, which the card can rewrite itself, do not count.
+func TestPCIProberIdentifiesACardWhoseIDsCannotBeReadByItsVPD(t *testing.T) {
+	ro := func(serial string) []string {
+		return []string{"PN", "MCX621102AN-ADAT", "EC", "A6", "SN", serial, "V0", "PCIeGen4 x8"}
+	}
+	for name, tc := range map[string]struct {
+		reread   []byte
+		wantKept bool
+	}{
+		"read-write keywords rewritten": {vpdImage("ConnectX-6 Dx EN adapter card, 25GbE", ro("MT2140X12345"), []string{"V1", "asset-7"}), true},
+		"another serial number":         {vpdImage("ConnectX-6 Dx EN adapter card, 25GbE", ro("MT2140X99999"), nil), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := withVPD()
+			answer := mlxVPD()
+			privileged, _ := vpdHelper(func(helper.Request) (helper.Response, error) {
+				return helper.Response{Data: answer}, nil
+			})
+			probe := vpdProbes(t, m, privileged)
+			if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD == nil {
+				t.Fatalf("awake: vpd_error %q", d.VPDError)
+			}
+
+			// Awake, IDs unreadable, VPD read again.
+			subsystem := m[connectXDir+"/subsystem_device"]
+			setConnectX(m, "subsystem_device", "garbage")
+			answer = tc.reread
+			if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD == nil || d.VPDError != "" {
+				t.Fatalf("re-read: vpd %+v, vpd_error %q", d.VPD, d.VPDError)
+			}
+
+			m[connectXDir+"/subsystem_device"] = subsystem
+			setConnectX(m, "power/runtime_status", "suspended")
+			d := pciDevice(t, probe(), "0000:3b:00.0")
+			if tc.wantKept && (d.VPD == nil || d.VPD.SerialNumber != "MT2140X12345") {
+				t.Errorf("powered down: vpd %+v, vpd_error %q; want the VPD read while awake", d.VPD, d.VPDError)
+			}
+			if !tc.wantKept && (d.VPD != nil || d.VPDError != vpdPoweredDown) {
+				t.Errorf("powered down: vpd %+v, vpd_error %q; want none and %q", d.VPD, d.VPDError, vpdPoweredDown)
+			}
+		})
+	}
+}
+
+// A vpd file whose existence cannot be checked says nothing about the
+// card: it keeps the VPD read from it.
+func TestPCIProberKeepsTheVPDOfACardWhoseVPDFileCannotBeChecked(t *testing.T) {
+	m := withVPD()
+	fsys := deniedFS{FS: m, denied: map[string]bool{}}
+	privileged, asked := mlxHelper()
+	probe := vpdProbes(t, fsys, privileged)
+
+	if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD == nil || d.VPD.SerialNumber != "MT2140X12345" {
+		t.Fatalf("awake: vpd %+v, vpd_error %q", d.VPD, d.VPDError)
+	}
+	fsys.denied[pciDeviceDir("0000:3b:00.0")+"/vpd"] = true
+	if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD != nil {
+		t.Fatalf("vpd file unreadable: vpd %+v", d.VPD)
+	}
+	delete(fsys.denied, pciDeviceDir("0000:3b:00.0")+"/vpd")
+	setConnectX(m, "power/runtime_status", "suspended")
+	if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPDError != "" || d.VPD == nil || d.VPD.SerialNumber != "MT2140X12345" {
+		t.Errorf("powered down: vpd %+v, vpd_error %q; want the VPD read while awake", d.VPD, d.VPDError)
+	}
+	if *asked != 1 {
+		t.Errorf("the helper was asked %d times, want once", *asked)
+	}
+}
+
+// A card removed while its VPD is being read is left out of the probe,
+// and so is what was read from it: a same-model card found powered down
+// at its address later must not get it.
+func TestPCIProberForgetsTheVPDOfACardRemovedDuringItsRead(t *testing.T) {
+	m := withVPD()
+	listing := pciDeviceDir("0000:3b:00.0")
+	entry := m[listing]
+	privileged, asked := vpdHelper(func(helper.Request) (helper.Response, error) {
+		delete(m, listing) // unplugged mid-read
+		return helper.Response{Data: mlxVPD()}, nil
+	})
+	probe := vpdProbes(t, m, privileged)
+
+	for _, d := range probe().Devices {
+		if d.Address == "0000:3b:00.0" {
+			t.Fatalf("the card removed during its read is listed: %+v", d)
+		}
+	}
+	m[listing] = entry
+	setConnectX(m, "power/runtime_status", "suspended")
+	if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD != nil || d.VPDError != vpdPoweredDown {
+		t.Errorf("replacement: vpd %+v, vpd_error %q; want none and %q", d.VPD, d.VPDError, vpdPoweredDown)
+	}
+	if *asked != 1 {
+		t.Errorf("the helper was asked %d times, want once", *asked)
 	}
 }
 
