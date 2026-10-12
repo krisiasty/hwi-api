@@ -232,6 +232,60 @@ func TestValidateRejectsBrokenConfigurations(t *testing.T) {
 	}
 }
 
+func TestValidCredentialName(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"letters, digits, underscore, hyphen and dot", "TLS_cert-2.pem", true},
+		{"a dot alone among others", ".hidden", true},
+		{"the longest allowed", strings.Repeat("a", 64), true},
+		{"empty", "", false},
+		{"dot", ".", false},
+		{"dot dot", "..", false},
+		{"one too long", strings.Repeat("a", 65), false},
+		{"a slash", "tls/cert.pem", false},
+		{"a backslash", `tls\cert.pem`, false},
+		{"a space", "tls cert.pem", false},
+		{"base64 padding", "eyJhbGciOi==", false},
+		{"a non-ASCII letter", "certé", false},
+		{"invalid UTF-8", "cert\xff", false},
+		{"a trailing newline", "cert.pem\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := validCredentialName(tc.in); got != tc.want {
+				t.Errorf("validCredentialName(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidDigestHex(t *testing.T) {
+	good := strings.Repeat("0123456789abcdef", 4)
+	for _, tc := range []struct {
+		name string
+		hex  string
+		want bool
+	}{
+		{"64 lowercase hex characters", good, true},
+		{"empty", "", false},
+		{"one short", good[:63], false},
+		{"one long", good + "0", false},
+		{"a non-hex letter", good[:63] + "g", false},
+		{"uppercase hex", strings.ToUpper(good), false},
+		{"a space", " " + good[1:], false},
+		{"a multi-byte character", good[:62] + "é", false},
+		{"a trailing newline", good[:63] + "\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := validDigestHex(tc.hex); got != tc.want {
+				t.Errorf("validDigestHex(%q) = %v, want %v", tc.hex, got, tc.want)
+			}
+		})
+	}
+}
+
 // A malformed digest may be a live token pasted into the wrong field, and
 // the error ends up on stderr and in the journal, so it names the entry by
 // position and must not contain any of its characters.

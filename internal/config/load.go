@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -23,6 +24,14 @@ const digestHexLen = 64
 // credentialNameMaxLen is systemd's own limit on a credential identifier.
 const credentialNameMaxLen = 64
 
+// credentialNamePattern and digestHexPattern are the characters a
+// credential name and a token digest's hex part may hold. Their lengths are
+// checked against the constants above, before the pattern scans anything.
+var (
+	credentialNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+	digestHexPattern      = regexp.MustCompile(`^[0-9a-f]+$`)
+)
+
 // validCredentialName reports whether name is a systemd credential
 // identifier: letters, digits, underscore, hyphen and dot, capped at
 // credentialNameMaxLen, and neither "." nor "..". The dot is there for
@@ -35,35 +44,13 @@ const credentialNameMaxLen = 64
 // printed, and with "." and ".." they also cover the path-traversal
 // rejections ("", ".", "..", "/", "\").
 func validCredentialName(name string) bool {
-	if name == "" || name == "." || name == ".." || len(name) > credentialNameMaxLen {
-		return false
-	}
-	for i := 0; i < len(name); i++ {
-		c := name[i]
-		switch {
-		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '_', c == '-', c == '.':
-		default:
-			return false
-		}
-	}
-	return true
+	return len(name) <= credentialNameMaxLen && name != "." && name != ".." && credentialNamePattern.MatchString(name)
 }
 
-// validDigestHex reports whether hex is exactly digestHexLen lowercase hex
+// validDigestHex reports whether s is exactly digestHexLen lowercase hex
 // characters.
-func validDigestHex(hex string) bool {
-	if len(hex) != digestHexLen {
-		return false
-	}
-	for i := 0; i < len(hex); i++ {
-		c := hex[i]
-		switch {
-		case c >= '0' && c <= '9', c >= 'a' && c <= 'f':
-		default:
-			return false
-		}
-	}
-	return true
+func validDigestHex(s string) bool {
+	return len(s) == digestHexLen && digestHexPattern.MatchString(s)
 }
 
 // ResolvePath turns a configured path into a filesystem path. A
