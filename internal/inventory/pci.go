@@ -250,10 +250,20 @@ type pciCard struct {
 
 // identified reports whether every one of the card's IDs could be read. A
 // card with an unreadable ID cannot be told from another such card by its
-// IDs, so they neither match a cached card nor prove that one has gone,
-// and what is read from it is not cached.
+// IDs, so they do not match a cached card, and what is read from it is not
+// cached.
 func (c pciCard) identified() bool {
 	return c.vendor != unknown && c.device != unknown && c.subVendor != unknown && c.subDevice != unknown
+}
+
+// contradicts reports whether c is shown to be another card than cached
+// at the same address: one of its IDs that could be read differs. An
+// unreadable ID is no evidence either way, but it does not cancel the
+// evidence of the others.
+func (c pciCard) contradicts(cached pciCard) bool {
+	differs := func(seen, was string) bool { return seen != unknown && seen != was }
+	return differs(c.vendor, cached.vendor) || differs(c.device, cached.device) ||
+		differs(c.subVendor, cached.subVendor) || differs(c.subDevice, cached.subDevice)
 }
 
 // pciCardOf is the card a probe reported d as.
@@ -293,8 +303,8 @@ func (c *vpdCache) snapshot() map[string]cachedVPD {
 // update applies one probe's evidence. present is the card the probe
 // reported at each address, fresh the VPD it read from identified cards,
 // and gone the addresses whose card's own VPD showed it has gone. A cached
-// card is forgotten when its address is not present, holds another model,
-// or is gone; a fresh read is kept only for a card the probe reported, not
+// card is forgotten when its address is not present, holds a card whose
+// readable IDs contradict it, or is gone; a fresh read is kept only for a card the probe reported, not
 // for one removed while it was read.
 func (c *vpdCache) update(present map[string]pciCard, fresh map[string]cachedVPD, gone map[string]bool) {
 	c.mu.Lock()
@@ -302,7 +312,7 @@ func (c *vpdCache) update(present map[string]pciCard, fresh map[string]cachedVPD
 	next := make(map[string]cachedVPD, len(c.last)+len(fresh))
 	for address, e := range c.last {
 		card, ok := present[address]
-		if !ok || gone[address] || (card.identified() && card != e.card) {
+		if !ok || gone[address] || card.contradicts(e.card) {
 			continue
 		}
 		next[address] = e

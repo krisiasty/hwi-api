@@ -1036,6 +1036,57 @@ func TestPCIProberKeepsTheVPDOfACardWhoseOwnReadTheHelperFailed(t *testing.T) {
 	}
 }
 
+// An unreadable ID says nothing either way, but the IDs that can be read
+// still do: another device ID with the subsystem ID unreadable is another
+// model, and the cached VPD must not outlive it.
+func TestPCIProberForgetsTheVPDOfACardSeenReplacedByAModelWithAnUnreadableID(t *testing.T) {
+	for _, between := range []string{"suspended", "skipped"} {
+		t.Run(between, func(t *testing.T) {
+			m := withVPD()
+			// The onboard NIC sorts first; once hang is set, its read times
+			// out and every later read in the refresh is skipped.
+			m["sys/devices/pci0000:00/0000:00:1f.6/vpd"] = &fstest.MapFile{Mode: 0o600}
+			hang := false
+			privileged, _ := vpdHelper(func(req helper.Request) (helper.Response, error) {
+				if req.Address == "0000:00:1f.6" {
+					if hang {
+						return helper.Response{Error: helper.ErrCodeTimeout, Message: "the read did not finish in time"}, nil
+					}
+					return helper.Response{Error: helper.ErrCodeNotFound}, nil
+				}
+				return helper.Response{Data: mlxVPD()}, nil
+			})
+			probe := vpdProbes(t, m, privileged)
+
+			if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD == nil || d.VPD.SerialNumber != "MT2140X12345" {
+				t.Fatalf("awake: vpd %+v, vpd_error %q", d.VPD, d.VPDError)
+			}
+
+			// Another model, its subsystem ID unreadable, and not read.
+			subsystem := m[connectXDir+"/subsystem_device"]
+			setConnectX(m, "device", "0x101f")
+			setConnectX(m, "subsystem_device", "garbage")
+			if between == "suspended" {
+				setConnectX(m, "power/runtime_status", "suspended")
+			} else {
+				hang = true
+			}
+			if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD != nil {
+				t.Fatalf("another model: vpd %+v", d.VPD)
+			}
+
+			// A card of the first model again, fully identified, powered down.
+			hang = false
+			setConnectX(m, "device", "0x101d")
+			m[connectXDir+"/subsystem_device"] = subsystem
+			setConnectX(m, "power/runtime_status", "suspended")
+			if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD != nil || d.VPDError != vpdPoweredDown {
+				t.Errorf("the first model again: vpd %+v, vpd_error %q; want none and %q", d.VPD, d.VPDError, vpdPoweredDown)
+			}
+		})
+	}
+}
+
 // A card whose IDs cannot be read is told from the cached card by the
 // identity in its VPD, its serial and part numbers. Its read-write
 // keywords, which the card can rewrite itself, do not count.
