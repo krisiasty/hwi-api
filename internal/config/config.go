@@ -24,7 +24,7 @@ func (d Duration) Duration() time.Duration { return time.Duration(d) }
 func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 	var s string
 	if err := node.Decode(&s); err != nil {
-		return fmt.Errorf("must be a duration string such as \"30s\" or \"5m\"")
+		return errors.New("must be a duration string such as \"30s\" or \"5m\"")
 	}
 	parsed, err := time.ParseDuration(s)
 	if err != nil {
