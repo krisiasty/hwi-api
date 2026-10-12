@@ -13,10 +13,7 @@
 // Response line, any number per connection.
 package helper
 
-import (
-	"regexp"
-	"time"
-)
+import "time"
 
 // The operations.
 const (
@@ -26,21 +23,26 @@ const (
 	OpVPD = "vpd"
 )
 
-// SMBIOSTable is the DMI name for the raw SMBIOS table.
-const SMBIOSTable = "DMI"
+// The DMI names OpDMI accepts: the four identity fields the kernel makes
+// root-only under /sys/class/dmi/id, named after their files, and the raw
+// SMBIOS table. The daemon's collectors ask for them by these constants, so
+// they can only ask for what the helper serves.
+const (
+	ProductUUID   = "product_uuid"
+	ProductSerial = "product_serial"
+	BoardSerial   = "board_serial"
+	ChassisSerial = "chassis_serial"
+	SMBIOSTable   = "DMI"
+)
 
 // dmiNames is the allowlist of names OpDMI accepts, each mapped to the file
-// it reads, relative to the host root: the four DMI identity fields the
-// kernel makes root-only, and the SMBIOS table. The names are the files' own,
-// as the daemon's collectors know them (inventory.RootOnlyDMIFiles and
-// inventory.SMBIOSTableFile; a test there keeps them in step). Read it
-// through DMIFile.
+// it reads, relative to the host root. Read it through DMIFile.
 var dmiNames = map[string]string{
-	"product_uuid":   "sys/class/dmi/id/product_uuid",
-	"product_serial": "sys/class/dmi/id/product_serial",
-	"board_serial":   "sys/class/dmi/id/board_serial",
-	"chassis_serial": "sys/class/dmi/id/chassis_serial",
-	SMBIOSTable:      "sys/firmware/dmi/tables/DMI",
+	ProductUUID:   "sys/class/dmi/id/product_uuid",
+	ProductSerial: "sys/class/dmi/id/product_serial",
+	BoardSerial:   "sys/class/dmi/id/board_serial",
+	ChassisSerial: "sys/class/dmi/id/chassis_serial",
+	SMBIOSTable:   "sys/firmware/dmi/tables/DMI",
 }
 
 // DMIFile returns the file, relative to the host root, that OpDMI reads for
@@ -96,10 +98,3 @@ const (
 // on faulty hardware can stall in the kernel; the helper then answers
 // ErrCodeTimeout and exits.
 const DefaultReadTimeout = 5 * time.Second
-
-// PCIAddressPattern matches a PCI address, domain:bus:device.function. A
-// domain is usually four hex digits, but an Intel VMD domain has five, such
-// as 10000. The helper and the daemon's collectors share it.
-const PCIAddressPattern = `^[0-9a-f]{4,}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$`
-
-var pciAddress = regexp.MustCompile(PCIAddressPattern)

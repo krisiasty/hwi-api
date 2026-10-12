@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/krisiasty/hwi-api/internal/pciaddr"
 )
 
 // blockDir lists every block device the kernel has, as a symlink, named by
@@ -376,7 +378,7 @@ func devicePCIAddress(fsys fs.FS, dir string) string {
 // address, or "".
 func lastPCIAddress(p string) string {
 	for _, c := range slices.Backward(strings.Split(p, "/")) {
-		if pciAddress.MatchString(c) {
+		if pciaddr.Valid(c) {
 			return c
 		}
 	}

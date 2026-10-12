@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/krisiasty/hwi-api/internal/helper"
 )
 
 // slotStructure is an SMBIOS 2.6 Type 9 structure.
@@ -94,12 +96,12 @@ func TestSlotsProber(t *testing.T) {
 		}
 		return v.(*Slots)
 	}
-	got := probe(fstest.MapFS{SMBIOSTableFile: {Data: table(slotStructure("Slot 1", 0xA5, 0x0D, 3, 0, 0x17, 0))}})
+	got := probe(fstest.MapFS{helper.SMBIOSTable: {Data: table(slotStructure("Slot 1", 0xA5, 0x0D, 3, 0, 0x17, 0))}})
 	if got.SlotsError != "" || len(got.Slots) != 1 || got.Slots[0].Designation != "Slot 1" {
 		t.Errorf("slots = %+v", got)
 	}
 	// A VM's table has no Type 9: an empty list, not an error.
-	if got := probe(fstest.MapFS{SMBIOSTableFile: {Data: table()}}); got.SlotsError != "" || got.Slots == nil || len(got.Slots) != 0 {
+	if got := probe(fstest.MapFS{helper.SMBIOSTable: {Data: table()}}); got.SlotsError != "" || got.Slots == nil || len(got.Slots) != 0 {
 		t.Errorf("no Type 9: %+v, want an empty list", got)
 	}
 	if got := probe(nil); got.Slots != nil || !strings.Contains(got.SlotsError, "not configured") {
@@ -112,7 +114,7 @@ func TestSlotsProber(t *testing.T) {
 	} else if b, err := json.Marshal(got); err != nil || !strings.Contains(string(b), `"slots":null`) {
 		t.Errorf("no table: payload %s (%v), want null slots", b, err)
 	}
-	if got := probe(fstest.MapFS{SMBIOSTableFile: {Data: []byte{9, 2, 0, 0}}}); got.Slots != nil || !strings.Contains(got.SlotsError, "decoding") {
+	if got := probe(fstest.MapFS{helper.SMBIOSTable: {Data: []byte{9, 2, 0, 0}}}); got.Slots != nil || !strings.Contains(got.SlotsError, "decoding") {
 		t.Errorf("broken table: %+v", got)
 	}
 }

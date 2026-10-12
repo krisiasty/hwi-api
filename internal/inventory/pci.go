@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/krisiasty/hwi-api/internal/helper"
+	"github.com/krisiasty/hwi-api/internal/pciaddr"
 	"github.com/krisiasty/hwi-api/internal/pciids"
 )
 
@@ -27,11 +27,6 @@ const pciSlotsDir = "sys/bus/pci/slots"
 // pciKernelNameKinds are the device subdirectories naming what the kernel
 // built on a PCI device.
 var pciKernelNameKinds = []string{"drm", "infiniband", "net", "nvme"}
-
-// pciAddress matches a PCI address, domain:bus:device.function. A domain is
-// usually four hex digits, but an Intel VMD domain has five, such as 10000;
-// see helper.PCIAddressPattern, which the helper shares.
-var pciAddress = regexp.MustCompile(helper.PCIAddressPattern)
 
 // PCI is the pci payload.
 type PCI struct {
@@ -216,7 +211,7 @@ func (src pciSources) readDevice(address string) (PCIDevice, bool) {
 	// A VF takes its physical function's slot: with ARI, VFs often sit at
 	// device numbers the slot's address does not cover.
 	slotOf := address
-	if pciAddress.MatchString(d.VFOf) {
+	if pciaddr.Valid(d.VFOf) {
 		slotOf = d.VFOf
 	}
 	bridge := class == "06"
@@ -487,7 +482,7 @@ func pciParentAddress(fsys fs.FS, address string) string {
 		return unknown
 	}
 	parent := path.Base(path.Dir(target))
-	if !pciAddress.MatchString(parent) {
+	if !pciaddr.Valid(parent) {
 		return ""
 	}
 	return parent
@@ -632,7 +627,7 @@ func pciAncestors(fsys fs.FS, address string) []string {
 	}
 	parts := strings.Split(path.Dir(target), "/")
 	var out []string
-	for i := len(parts) - 1; i >= 0 && pciAddress.MatchString(parts[i]); i-- {
+	for i := len(parts) - 1; i >= 0 && pciaddr.Valid(parts[i]); i-- {
 		out = append(out, parts[i])
 	}
 	return out
