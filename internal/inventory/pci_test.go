@@ -859,6 +859,58 @@ func TestPCIProberForgetsTheVPDOfACardSeenReplacedByAnotherModel(t *testing.T) {
 	}
 }
 
+// Seeing another model at the address proves the card has gone even when
+// that model has no VPD of its own, and so is never looked up in the
+// cache: a later card of the first model, found powered down, must still
+// not get the first card's VPD back.
+func TestPCIProberForgetsTheVPDOfACardSeenReplacedByAModelWithoutVPD(t *testing.T) {
+	for _, between := range []string{"active", "suspended"} {
+		t.Run(between, func(t *testing.T) {
+			m := withVPD()
+			privileged, asked := vpdHelper(func(helper.Request) (helper.Response, error) {
+				return helper.Response{Data: mlxVPD()}, nil
+			})
+			prober := NewPCIProber(m, testDB(t), privileged)
+			probe := func() PCIDevice {
+				t.Helper()
+				v, err := prober.Probe(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				return pciDevice(t, v.(*PCI), "0000:3b:00.0")
+			}
+			setDevice := func(id string) { m[connectXDir+"/device"] = &fstest.MapFile{Data: []byte(id + "\n")} }
+			setStatus := func(status string) {
+				m[connectXDir+"/power/runtime_status"] = &fstest.MapFile{Data: []byte(status + "\n")}
+			}
+
+			if d := probe(); d.VPD == nil || d.VPD.SerialNumber != "MT2140X12345" {
+				t.Fatalf("awake: vpd %+v, vpd_error %q", d.VPD, d.VPDError)
+			}
+
+			// Another model, with no VPD at all.
+			vpd := m[connectXDir+"/vpd"]
+			delete(m, connectXDir+"/vpd")
+			setDevice("0x101f")
+			setStatus(between)
+			if d := probe(); d.Product.ID != "101f" || d.VPD != nil || d.VPDError != "" {
+				t.Fatalf("model without VPD: product %q, vpd %+v, vpd_error %q", d.Product.ID, d.VPD, d.VPDError)
+			}
+
+			// A card of the first model again, powered down.
+			m[connectXDir+"/vpd"] = vpd
+			setDevice("0x101d")
+			setStatus("suspended")
+			if d := probe(); d.VPD != nil || d.VPDError != vpdPoweredDown {
+				t.Errorf("the first model again: vpd %+v, vpd_error %q; want none and %q", d.VPD, d.VPDError, vpdPoweredDown)
+			}
+			if *asked != 1 {
+				t.Errorf("the helper was asked %d times, want once", *asked)
+			}
+		})
+	}
+}
+
 // A card found awake but not read, because an earlier VPD read in the
 // refresh failed, may be a same-model replacement: the cached VPD cannot
 // vouch for it, so once it is powered down it is reported unread.

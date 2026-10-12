@@ -164,11 +164,11 @@ func NewPCIProber(rootFS fs.FS, db *pciids.DB, privileged fs.FS) Prober {
 				out.Devices = append(out.Devices, d)
 			}
 		}
-		// A card this probe did not find has gone, and whatever appears at
-		// its address later may be another card of the same model, which
-		// pciCard cannot tell from it. Forget its VPD, so a replacement
-		// found powered down is reported unread, not with the removed
-		// card's identity.
+		// A card this probe did not find, or found another model in place
+		// of, has gone, and whatever appears at its address later may be
+		// another card of its model, which pciCard cannot tell from it.
+		// Forget its VPD, so a replacement found powered down is reported
+		// unread, not with the removed card's identity.
 		cache.retain(out.Devices)
 		return out, nil
 	})
@@ -233,7 +233,7 @@ func (src pciSources) readDevice(address string) (PCIDevice, bool) {
 	// The vpd file is root-only, but its existence is not: the daemon may
 	// look, and asks the helper to read.
 	if _, err := fs.Stat(src.root, dir+"/vpd"); err == nil {
-		card := pciCard{address: address, vendor: vendor, device: product, subVendor: subVendor, subDevice: subID}
+		card := pciCardOf(d)
 		asleep := d.PowerState == "D3cold" || readOptional(fsys, dir+"/power/runtime_status") == "suspended"
 		d.VPD, d.VPDError = src.vpd.read(card, asleep)
 	}
@@ -246,13 +246,18 @@ func (src pciSources) readDevice(address string) (PCIDevice, bool) {
 // pciCard identifies the card at an address: a VPD read from it is reported
 // again only while the same card is there. Its IDs name the card's model,
 // not the card, so the prober also forgets an address's VPD whenever a
-// probe finds it empty (vpdCache.retain), finds another model there
-// (vpdCache.get), or finds the card awake but does not read it
+// probe finds it empty or another model there, whether or not that model
+// has VPD (vpdCache.retain), or finds the card awake but does not read it
 // (vpdReader.read). A same-model swap between two probes, with the
-// replacement powered down by the second, is beyond all three: nothing
-// sysfs offers without waking the card tells them apart.
+// replacement powered down by the second, is beyond both: nothing sysfs
+// offers without waking the card tells them apart.
 type pciCard struct {
 	address, vendor, device, subVendor, subDevice string
+}
+
+// pciCardOf is the card a probe reported d as.
+func pciCardOf(d PCIDevice) pciCard {
+	return pciCard{address: d.Address, vendor: d.Vendor.ID, device: d.Product.ID, subVendor: d.Subsystem.VendorID, subDevice: d.Subsystem.ID}
 }
 
 // vpdCache keeps, for each address, the VPD last read from the card there
@@ -273,20 +278,11 @@ type cachedVPD struct {
 func newVPDCache() *vpdCache { return &vpdCache{last: map[string]cachedVPD{}} }
 
 // get is the VPD last read from card, if it was read from this very card.
-// A VPD read from another card at card's address is forgotten: that card
-// has been seen gone, and a later card of its model there may not be it.
 func (c *vpdCache) get(card pciCard) (*PCIVPD, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.last[card.address]
-	if !ok {
-		return nil, false
-	}
-	if e.card != card {
-		delete(c.last, card.address)
-		return nil, false
-	}
-	return e.vpd, true
+	return e.vpd, ok && e.card == card
 }
 
 // set records v as card's VPD, or, when v is nil, forgets the card's.
@@ -300,18 +296,20 @@ func (c *vpdCache) set(card pciCard, v *PCIVPD) {
 	c.last[card.address] = cachedVPD{card: card, vpd: v}
 }
 
-// retain forgets the VPD of every address none of devices is at. The
+// retain forgets every VPD whose card is not among devices: its address
+// is gone, or holds another model. Devices without VPD count, since they
+// are never looked up in the cache, yet still prove the card has gone. The
 // lookup is built before the lock is taken, so a probe holds it no longer
 // than the deletions take.
 func (c *vpdCache) retain(devices []PCIDevice) {
-	present := make(map[string]bool, len(devices))
+	present := make(map[string]pciCard, len(devices))
 	for _, d := range devices {
-		present[d.Address] = true
+		present[d.Address] = pciCardOf(d)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for address := range c.last {
-		if !present[address] {
+	for address, e := range c.last {
+		if card, ok := present[address]; !ok || card != e.card {
 			delete(c.last, address)
 		}
 	}
