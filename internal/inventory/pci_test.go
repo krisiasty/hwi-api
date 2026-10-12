@@ -559,7 +559,7 @@ func TestPCIProberListsDisplayControllersWhateverTheirDriver(t *testing.T) {
 // root port, 0000:3a:00.0, and the NVMe drive one recorded at its own
 // address, plus an empty slot.
 func slotTable() fstest.MapFS {
-	return fstest.MapFS{SMBIOSTableFile: {Data: table(
+	return fstest.MapFS{helper.SMBIOSTable: {Data: table(
 		slotStructure("CPU1 SLOT3 PCI-E 4.0 X16", 0xBD, 0x0D, 4, 0, 0x3a, 0x00),
 		slotStructure("NVMe Bay 5", 0x24, 0x0A, 4, 0, 0x5e, 0x00),
 		slotStructure("CPU2 SLOT7 PCI-E 4.0 X8", 0xBC, 0x0B, 3, 0xFFFF, 0xFF, 0xFF),
@@ -644,7 +644,7 @@ func TestPCIProberDummyHostBridgeTakesNoSlot(t *testing.T) {
 	addPCIDevice(m, "pci0000:40/0000:40:01.0", map[string]string{"vendor": "0x1022", "class": "0x060000"})
 	addPCIDevice(m, "pci0000:40/0000:40:01.1", map[string]string{"vendor": "0x1022", "class": "0x060400"})
 	addPCIDevice(m, "pci0000:40/0000:40:01.1/0000:41:00.0", map[string]string{"vendor": "0x15b3", "class": "0x020000"})
-	fsys := fstest.MapFS{SMBIOSTableFile: {Data: table(slotStructure("CPU1 SLOT1", 0xBD, 0x0D, 4, 0, 0x40, 0x09))}}
+	fsys := fstest.MapFS{helper.SMBIOSTable: {Data: table(slotStructure("CPU1 SLOT1", 0xBD, 0x0D, 4, 0, 0x40, 0x09))}}
 	p := probePCIWith(t, m, testDB(t), fsys)
 	if d := pciDevice(t, p, "0000:40:01.0"); d.Slot != nil {
 		t.Errorf("dummy host bridge: slot %+v, want none", d.Slot)

@@ -96,6 +96,29 @@ func TestHandleCapsTheSize(t *testing.T) {
 	}
 }
 
+// DMIFile is the allowlist: each name the daemon may ask for maps to the
+// file the kernel puts it in, and nothing else is allowed. The names are
+// written out rather than taken from the constants, because they are the
+// protocol's wire values.
+func TestDMIFile(t *testing.T) {
+	for name, want := range map[string]string{
+		"product_uuid":   "sys/class/dmi/id/product_uuid",
+		"product_serial": "sys/class/dmi/id/product_serial",
+		"board_serial":   "sys/class/dmi/id/board_serial",
+		"chassis_serial": "sys/class/dmi/id/chassis_serial",
+		"DMI":            "sys/firmware/dmi/tables/DMI",
+	} {
+		if got, ok := DMIFile(name); !ok || got != want {
+			t.Errorf("DMIFile(%q) = %q, %v, want %q", name, got, ok, want)
+		}
+	}
+	for _, name := range []string{"", "product_name", "../../etc/shadow", "sys/class/dmi/id/product_serial"} {
+		if got, ok := DMIFile(name); ok {
+			t.Errorf("DMIFile(%q) = %q, allowed; want refused", name, got)
+		}
+	}
+}
+
 // Each kind of file has its own cap: an identity field's is far below the
 // SMBIOS table's, and the table's below anything a request could make the
 // helper buffer without bound.

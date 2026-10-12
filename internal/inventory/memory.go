@@ -43,10 +43,6 @@ type HugePageAmounts struct {
 	Reserved int64 `json:"reserved"`
 }
 
-// SMBIOSTableFile is the name the privileged helper serves
-// /sys/firmware/dmi/tables/DMI under (helper.SMBIOSTable).
-const SMBIOSTableFile = "DMI"
-
 // NewMemoryProber reads the memory totals and huge pages from rootFS, which
 // is the host root, and the modules from the SMBIOS table in privileged, the
 // helper's file system. The table is root-only, so without the helper

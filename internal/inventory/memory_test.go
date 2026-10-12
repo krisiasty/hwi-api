@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/krisiasty/hwi-api/internal/helper"
 )
 
 const testMeminfo = `MemTotal:       263846644 kB
@@ -43,7 +45,7 @@ func hostFS() fstest.MapFS {
 // twoSlots is a table with a 32 GiB module and an empty slot.
 func twoSlots() fstest.MapFS {
 	empty := structure(smbiosTypeMemoryDevice, 0x28, func(f []byte) { f[0x10] = 1 }, "DIMM_A2")
-	return fstest.MapFS{SMBIOSTableFile: {Data: table(ddr5(), empty)}}
+	return fstest.MapFS{helper.SMBIOSTable: {Data: table(ddr5(), empty)}}
 }
 
 func probeMemory(t *testing.T, root, privileged fs.FS) (*Memory, string) {
@@ -105,7 +107,7 @@ func TestMemoryProberWithoutModules(t *testing.T) {
 	}{
 		{"no helper configured", nil, "not configured", false},
 		{"host without a table", fstest.MapFS{}, "the host has none", false},
-		{"broken table", fstest.MapFS{SMBIOSTableFile: {Data: []byte{17, 2, 0, 0}}}, "decoding the SMBIOS table", true},
+		{"broken table", fstest.MapFS{helper.SMBIOSTable: {Data: []byte{17, 2, 0, 0}}}, "decoding the SMBIOS table", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, logs := probeMemory(t, hostFS(), tc.privileged)

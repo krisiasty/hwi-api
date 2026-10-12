@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io/fs"
 	"strings"
+
+	"github.com/krisiasty/hwi-api/internal/helper"
 )
 
 // dmiDir is the sysfs directory the kernel publishes the SMBIOS strings in.
@@ -14,12 +16,6 @@ const dmiDir = "sys/class/dmi/id"
 // unknown is what a string field reads as when its source exists but cannot
 // be read: the field is there, but its value is not known.
 const unknown = "unknown"
-
-// RootOnlyDMIFiles lists the /sys/class/dmi/id files the kernel makes
-// root-only. The agent runs with no capabilities, so the privileged helper
-// (internal/helper) reads them for it; see the privileged argument of the
-// probers below.
-var RootOnlyDMIFiles = []string{"product_uuid", "product_serial", "board_serial", "chassis_serial"}
 
 // Product is the product payload: the system's identity as the firmware
 // reports it. Identifiers assesses SerialNumber and UUID.
@@ -148,8 +144,8 @@ func NewProductProber(rootFS, privileged fs.FS) Prober {
 		p.Family, _ = r.read("product_family")
 		p.Name, _ = r.read("product_name")
 		p.Vendor, _ = r.read("sys_vendor")
-		serial := r.rootOnly("product_serial")
-		uuid := r.rootOnly("product_uuid")
+		serial := r.rootOnly(helper.ProductSerial)
+		uuid := r.rootOnly(helper.ProductUUID)
 		p.SKU, _ = r.read("product_sku")
 		p.Version, _ = r.read("product_version")
 		if r.err != nil {
@@ -168,7 +164,7 @@ func NewBaseboardProber(rootFS, privileged fs.FS) Prober {
 		r := &dmiReader{root: rootFS, privileged: privileged}
 		var b Baseboard
 		b.AssetTag, _ = r.read("board_asset_tag")
-		serial := r.rootOnly("board_serial")
+		serial := r.rootOnly(helper.BoardSerial)
 		b.Vendor, _ = r.read("board_vendor")
 		b.Version, _ = r.read("board_version")
 		b.Product, _ = r.read("board_name")
@@ -187,7 +183,7 @@ func NewChassisProber(rootFS, privileged fs.FS) Prober {
 		r := &dmiReader{root: rootFS, privileged: privileged}
 		var c Chassis
 		c.AssetTag, _ = r.read("chassis_asset_tag")
-		serial := r.rootOnly("chassis_serial")
+		serial := r.rootOnly(helper.ChassisSerial)
 		typ, hasType := r.read("chassis_type")
 		c.Vendor, _ = r.read("chassis_vendor")
 		c.Version, _ = r.read("chassis_version")

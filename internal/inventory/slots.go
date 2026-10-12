@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+
+	"github.com/krisiasty/hwi-api/internal/helper"
 )
 
 // Slots is the slots payload: the expansion slots the firmware lists in
@@ -46,7 +48,7 @@ func readSMBIOSTable(privileged fs.FS) ([]byte, error) {
 	if privileged == nil {
 		return nil, fmt.Errorf("%w: the privileged helper is not configured", errNoSMBIOSTable)
 	}
-	table, err := fs.ReadFile(privileged, SMBIOSTableFile)
+	table, err := fs.ReadFile(privileged, helper.SMBIOSTable)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("%w: the host has none", errNoSMBIOSTable)
 	}

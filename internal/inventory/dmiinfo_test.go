@@ -281,18 +281,3 @@ func TestProductProberAsksAnUnavailableHelperOnce(t *testing.T) {
 		t.Errorf("asked the helper %d times, want 1", asked)
 	}
 }
-
-// The helper must serve every file the collectors ask it for, by the name
-// they use and from the file the kernel puts it in.
-func TestHelperServesEveryRootOnlyDMIFile(t *testing.T) {
-	for _, name := range RootOnlyDMIFiles {
-		if got, ok := helper.DMIFile(name); !ok || got != dmiTestDir+"/"+name {
-			t.Errorf("helper.DMIFile(%q) = %q, %v, want %s/%s", name, got, ok, dmiTestDir, name)
-		}
-	}
-	table, ok := helper.DMIFile(SMBIOSTableFile)
-	if SMBIOSTableFile != helper.SMBIOSTable || !ok || table != "sys/firmware/dmi/tables/DMI" {
-		t.Errorf("the memory prober reads %q; the helper serves the SMBIOS table as %q from %q (found %v)",
-			SMBIOSTableFile, helper.SMBIOSTable, table, ok)
-	}
-}
