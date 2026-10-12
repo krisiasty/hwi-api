@@ -353,20 +353,6 @@ func TestPCIProberSkipsAVanishedDevice(t *testing.T) {
 	}
 }
 
-func TestPCIAddressPattern(t *testing.T) {
-	for s, want := range map[string]bool{
-		"0000:3b:00.0":  true,
-		"10000:01:00.0": true, // an Intel VMD domain
-		"pci0000:3a":    false,
-		"0000:3b:00.8":  false,
-		"0000:3b:00":    false,
-	} {
-		if got := pciAddress.MatchString(s); got != want {
-			t.Errorf("pciAddress matches %q = %v, want %v", s, got, want)
-		}
-	}
-}
-
 func TestPCISlotAddress(t *testing.T) {
 	for in, want := range map[string]string{
 		"0000:3b:00.2":  "0000:3b:00",

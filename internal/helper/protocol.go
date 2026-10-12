@@ -13,10 +13,7 @@
 // Response line, any number per connection.
 package helper
 
-import (
-	"regexp"
-	"time"
-)
+import "time"
 
 // The operations.
 const (
@@ -96,10 +93,3 @@ const (
 // on faulty hardware can stall in the kernel; the helper then answers
 // ErrCodeTimeout and exits.
 const DefaultReadTimeout = 5 * time.Second
-
-// PCIAddressPattern matches a PCI address, domain:bus:device.function. A
-// domain is usually four hex digits, but an Intel VMD domain has five, such
-// as 10000. The helper and the daemon's collectors share it.
-const PCIAddressPattern = `^[0-9a-f]{4,}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$`
-
-var pciAddress = regexp.MustCompile(PCIAddressPattern)

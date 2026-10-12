@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/krisiasty/hwi-api/internal/ethtool"
+	"github.com/krisiasty/hwi-api/internal/pciaddr"
 )
 
 // classNetDir lists every network interface, each a link to its directory under sys/devices.
@@ -224,11 +225,11 @@ func readIfindex(fsys fs.FS, name string) (uint32, bool) {
 // interface, whose parent is virtio<N>, the PCI device the virtio device sits on. It is "" for any other parent, such as a USB interface.
 func nicPCIAddress(device string) string {
 	name := path.Base(device)
-	if pciAddress.MatchString(name) {
+	if pciaddr.Valid(name) {
 		return name
 	}
 	if strings.HasPrefix(name, "virtio") {
-		if parent := path.Base(path.Dir(device)); pciAddress.MatchString(parent) {
+		if parent := path.Base(path.Dir(device)); pciaddr.Valid(parent) {
 			return parent
 		}
 	}

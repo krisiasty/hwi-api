@@ -9,6 +9,8 @@ import (
 	"io"
 	"io/fs"
 	"time"
+
+	"github.com/krisiasty/hwi-api/internal/pciaddr"
 )
 
 // Handler answers requests from Root, the host root, bounding each read by
@@ -61,7 +63,7 @@ func resolve(req Request) (string, int64, error) {
 		}
 		return name, maxDMIField, nil
 	case OpVPD:
-		if !pciAddress.MatchString(req.Address) {
+		if !pciaddr.Valid(req.Address) {
 			return "", 0, fmt.Errorf("%q is not a PCI address", req.Address)
 		}
 		return "sys/bus/pci/devices/" + req.Address + "/vpd", maxVPD, nil

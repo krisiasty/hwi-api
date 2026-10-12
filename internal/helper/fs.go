@@ -7,6 +7,8 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"github.com/krisiasty/hwi-api/internal/pciaddr"
 )
 
 // NewFS presents the operations do answers as a read-only file system:
@@ -55,7 +57,7 @@ func requestFor(name string) (Request, bool) {
 	if _, ok := DMIFile(name); ok {
 		return Request{Op: OpDMI, Name: name}, true
 	}
-	if addr, ok := strings.CutPrefix(name, "vpd/"); ok && pciAddress.MatchString(addr) {
+	if addr, ok := strings.CutPrefix(name, "vpd/"); ok && pciaddr.Valid(addr) {
 		return Request{Op: OpVPD, Address: addr}, true
 	}
 	return Request{}, false
