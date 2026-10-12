@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -211,6 +212,14 @@ func TestValidateRejectsBrokenConfigurations(t *testing.T) {
 		{"zero idle timeout", func(c *Config) { c.API.Timeouts.Idle = 0 }, "api.timeouts.idle must"},
 		{"malformed allow entry", func(c *Config) { c.API.Access.Allow = []string{"10.0.0.0/64"} }, "allow"},
 		{"mtls without a ca", func(c *Config) { c.API.Auth.MTLS.Enabled = true }, "client_ca_file"},
+		{"mtls ca not a valid credential", func(c *Config) {
+			c.API.Auth.MTLS.Enabled = true
+			c.API.Auth.MTLS.ClientCAFile = "credential:not/valid"
+		}, "api.auth.mtls.client_ca_file: credential name is not a valid identifier"},
+		{"mtls ca missing", func(c *Config) {
+			c.API.Auth.MTLS.Enabled = true
+			c.API.Auth.MTLS.ClientCAFile = "/nonexistent/client-ca.pem"
+		}, "api.auth.mtls.client_ca_file: stat /nonexistent/client-ca.pem"},
 		{"auth enabled with no mechanism selected", func(c *Config) { c.API.Auth.Token.Enabled = false }, "authentication"},
 		{"both listeners on one address and port", func(c *Config) {
 			c.API.Bind.Addresses = []string{"127.0.0.1"}
@@ -382,12 +391,13 @@ func TestValidateRejectsAuthEnabledWithNoAuthBlockAtAll(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	src := "api:\n" +
-		"  tls:\n" +
-		"    cert_file: " + cert + "\n" +
-		"    key_file: " + key + "\n" +
-		"  access:\n" +
-		"    allow: [\"10.0.0.0/8\"]\n"
+	src := fmt.Sprintf(`api:
+  tls:
+    cert_file: %s
+    key_file: %s
+  access:
+    allow: ["10.0.0.0/8"]
+`, cert, key)
 
 	cfg, err := Decode(strings.NewReader(src))
 	if err != nil {

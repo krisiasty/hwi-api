@@ -70,7 +70,7 @@ func ResolvePath(s string) (string, error) {
 		// Report only the length: name may be a live secret an operator
 		// pasted into the wrong field, and none of it is safe to echo.
 		return "", fmt.Errorf("credential name is not a valid identifier "+
-			"(%d characters; expected letters, digits, \"_\", \"-\" or \".\", up to 64)", len(name))
+			`(%d characters; expected letters, digits, "_", "-" or ".", up to 64)`, len(name))
 	}
 	dir := os.Getenv("CREDENTIALS_DIRECTORY")
 	if dir == "" {
@@ -155,7 +155,7 @@ func (c Config) Validate() ([]string, error) {
 	switch c.API.TLS.MinVersion {
 	case "1.2", "1.3":
 	default:
-		return nil, fmt.Errorf("api.tls.min_version %q: want \"1.2\" or \"1.3\"", c.API.TLS.MinVersion)
+		return nil, fmt.Errorf(`api.tls.min_version %q: want "1.2" or "1.3"`, c.API.TLS.MinVersion)
 	}
 	if c.API.TLS.Enabled {
 		if err := validateFilePath("api.tls.cert_file", c.API.TLS.CertFile); err != nil {
@@ -169,73 +169,11 @@ func (c Config) Validate() ([]string, error) {
 			"only disable TLS when a trusted local proxy terminates it in front of this agent")
 	}
 
-	if c.API.Auth.Enabled {
-		// api.auth.enabled defaults to true, including when the whole auth
-		// block is absent, so an operator who forgets, mistypes or deletes
-		// this section gets a hard error here rather than a silently
-		// unauthenticated listener: omission must not be the insecure path.
-		//
-		// mTLS only works when this listener terminates TLS itself: without
-		// TLS no request carries a client certificate, so an enabled mTLS
-		// block is inert. It then counts as no mechanism, and, as for any
-		// inactive mechanism, its CA file is not required.
-		mtlsActive := c.API.Auth.MTLS.Enabled && c.API.TLS.Enabled
-		if !mtlsActive && !c.API.Auth.Token.Enabled {
-			if c.API.Auth.MTLS.Enabled {
-				return nil, fmt.Errorf("api.auth.mtls is the only enabled authentication mechanism, but " +
-					"api.tls.enabled is false: client certificates can only be presented over TLS terminated " +
-					"by this listener, so no client could ever authenticate; enable api.tls, enable " +
-					"api.auth.token, or set api.auth.enabled: false")
-			}
-			return nil, fmt.Errorf("api.auth.enabled is true but no authentication mechanism is enabled: " +
-				"set api.auth.mtls.enabled or api.auth.token.enabled, or set api.auth.enabled: false to " +
-				"disable authentication deliberately")
-		}
-		if c.API.Auth.MTLS.Enabled && !c.API.TLS.Enabled {
-			warnings = append(warnings, "api.auth.mtls.enabled is true but has no effect because api.tls.enabled "+
-				"is false: no request can carry a client certificate, so only api.auth.token authenticates")
-		}
-		if mtlsActive {
-			if c.API.Auth.MTLS.ClientCAFile == "" {
-				return nil, fmt.Errorf("api.auth.mtls.client_ca_file is required when mTLS is enabled")
-			}
-			resolved, err := ResolvePath(c.API.Auth.MTLS.ClientCAFile)
-			if err != nil {
-				return nil, fmt.Errorf("api.auth.mtls.client_ca_file: %w", err)
-			}
-			if _, err := os.Stat(resolved); err != nil {
-				return nil, fmt.Errorf("api.auth.mtls.client_ca_file: %w", redactCredentialPath(c.API.Auth.MTLS.ClientCAFile, err))
-			}
-		}
-		if c.API.Auth.Token.Enabled {
-			if len(c.API.Auth.Token.Hashes) == 0 && c.API.Auth.Token.HashesFile == "" {
-				return nil, fmt.Errorf("api.auth.token is enabled but no digest is configured: " +
-					"set hashes or hashes_file")
-			}
-			for i, h := range c.API.Auth.Token.Hashes {
-				if err := validateDigest(h); err != nil {
-					return nil, fmt.Errorf("api.auth.token.hashes[%d]: %w", i, err)
-				}
-			}
-		}
-	} else {
-		warnings = append(warnings, "api.auth.enabled is false: the API listener will admit any client "+
-			"api.access.allow lets through, with no credential check at all")
-		// No authenticator is built, so a mechanism left enabled here is
-		// inert: its credentials are not required or checked. Say so, in
-		// case an operator believes it is still protecting the listener.
-		for _, m := range []struct {
-			name    string
-			enabled bool
-		}{
-			{"api.auth.mtls", c.API.Auth.MTLS.Enabled},
-			{"api.auth.token", c.API.Auth.Token.Enabled},
-		} {
-			if m.enabled {
-				warnings = append(warnings, m.name+".enabled is true but has no effect because api.auth.enabled is false")
-			}
-		}
+	authWarnings, err := c.validateAuth()
+	if err != nil {
+		return nil, err
 	}
+	warnings = append(warnings, authWarnings...)
 
 	if !c.API.TLS.Enabled && !c.API.Auth.Enabled {
 		warnings = append(warnings, "api.tls.enabled and api.auth.enabled are both false: the API listener will "+
@@ -256,7 +194,7 @@ func (c Config) Validate() ([]string, error) {
 	}
 
 	if c.Inventory.Refresh.Interval <= 0 {
-		return nil, fmt.Errorf("inventory.refresh.interval must be a positive duration")
+		return nil, errors.New("inventory.refresh.interval must be a positive duration")
 	}
 	for _, name := range apiv1.Subsystems() {
 		sub, ok := c.Inventory.Refresh.Subsystems[name]
@@ -289,9 +227,85 @@ func (c Config) Validate() ([]string, error) {
 	}
 
 	if c.API.MaxConcurrentRequests <= 0 {
-		return nil, fmt.Errorf("api.max_concurrent_requests must be positive")
+		return nil, errors.New("api.max_concurrent_requests must be positive")
 	}
 
+	return warnings, nil
+}
+
+// validateAuth checks api.auth: with authentication on, at least one
+// mechanism that can work and the credentials it needs; with it off, the
+// warnings that say so. It returns its warnings in the order Validate
+// reports them.
+func (c Config) validateAuth() ([]string, error) {
+	var warnings []string
+	if c.API.Auth.Enabled {
+		// api.auth.enabled defaults to true, including when the whole auth
+		// block is absent, so an operator who forgets, mistypes or deletes
+		// this section gets a hard error here rather than a silently
+		// unauthenticated listener: omission must not be the insecure path.
+		//
+		// mTLS only works when this listener terminates TLS itself: without
+		// TLS no request carries a client certificate, so an enabled mTLS
+		// block is inert. It then counts as no mechanism, and, as for any
+		// inactive mechanism, its CA file is not required.
+		mtlsActive := c.API.Auth.MTLS.Enabled && c.API.TLS.Enabled
+		if !mtlsActive && !c.API.Auth.Token.Enabled {
+			if c.API.Auth.MTLS.Enabled {
+				return nil, errors.New("api.auth.mtls is the only enabled authentication mechanism, but " +
+					"api.tls.enabled is false: client certificates can only be presented over TLS terminated " +
+					"by this listener, so no client could ever authenticate; enable api.tls, enable " +
+					"api.auth.token, or set api.auth.enabled: false")
+			}
+			return nil, errors.New("api.auth.enabled is true but no authentication mechanism is enabled: " +
+				"set api.auth.mtls.enabled or api.auth.token.enabled, or set api.auth.enabled: false to " +
+				"disable authentication deliberately")
+		}
+		if c.API.Auth.MTLS.Enabled && !mtlsActive {
+			warnings = append(warnings, "api.auth.mtls.enabled is true but has no effect because api.tls.enabled "+
+				"is false: no request can carry a client certificate, so only api.auth.token authenticates")
+		}
+		if mtlsActive {
+			if c.API.Auth.MTLS.ClientCAFile == "" {
+				return nil, errors.New("api.auth.mtls.client_ca_file is required when mTLS is enabled")
+			}
+			resolved, err := ResolvePath(c.API.Auth.MTLS.ClientCAFile)
+			if err != nil {
+				return nil, fmt.Errorf("api.auth.mtls.client_ca_file: %w", err)
+			}
+			if _, err := os.Stat(resolved); err != nil {
+				return nil, fmt.Errorf("api.auth.mtls.client_ca_file: %w", redactCredentialPath(c.API.Auth.MTLS.ClientCAFile, err))
+			}
+		}
+		if c.API.Auth.Token.Enabled {
+			if len(c.API.Auth.Token.Hashes) == 0 && c.API.Auth.Token.HashesFile == "" {
+				return nil, errors.New("api.auth.token is enabled but no digest is configured: " +
+					"set hashes or hashes_file")
+			}
+			for i, h := range c.API.Auth.Token.Hashes {
+				if err := validateDigest(h); err != nil {
+					return nil, fmt.Errorf("api.auth.token.hashes[%d]: %w", i, err)
+				}
+			}
+		}
+	} else {
+		warnings = append(warnings, "api.auth.enabled is false: the API listener will admit any client "+
+			"api.access.allow lets through, with no credential check at all")
+		// No authenticator is built, so a mechanism left enabled here is
+		// inert: its credentials are not required or checked. Say so, in
+		// case an operator believes it is still protecting the listener.
+		for _, m := range []struct {
+			name    string
+			enabled bool
+		}{
+			{"api.auth.mtls", c.API.Auth.MTLS.Enabled},
+			{"api.auth.token", c.API.Auth.Token.Enabled},
+		} {
+			if m.enabled {
+				warnings = append(warnings, m.name+".enabled is true but has no effect because api.auth.enabled is false")
+			}
+		}
+	}
 	return warnings, nil
 }
 
