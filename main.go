@@ -675,8 +675,11 @@ func collectVirtSignals(store *inventory.Store, rootFS fs.FS) inventory.VirtSign
 		// CPUDataPresent separates "the CPU reported no hypervisor flag",
 		// which is strong bare-metal evidence, from "no CPU flags were
 		// available at all", which is none - so it is set only when the cpu
-		// entry actually yielded capabilities.
-		CPUDataPresent:       len(capabilities) > 0,
+		// entry actually yielded capabilities, and only when the host's
+		// cpuinfo lists them as x86 flags. arm64's Features never carry a
+		// hypervisor bit, so a guest's Features look exactly like a
+		// bare-metal host's.
+		CPUDataPresent:       len(capabilities) > 0 && inventory.ReportsHypervisorFlag(rootFS),
 		CPUCapabilities:      capabilities,
 		DMI:                  make(map[string]string, len(dmiSources)),
 		HypervisorType:       readHostFile(rootFS, "sys/hypervisor/type"),

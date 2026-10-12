@@ -300,6 +300,26 @@ func parseCPUNumber(s string) (int, error) {
 	return n, nil
 }
 
+// ReportsHypervisorFlag reports whether rootFS's /proc/cpuinfo lists the
+// CPU capabilities as x86 flags, the only cpuinfo field that carries a
+// hypervisor bit when the kernel runs as a guest. arm64 lists Features,
+// which never do, so a missing bit there says nothing about the host. It
+// reads the file the cpu prober parses rather than going by the agent's
+// GOARCH, which under user-mode emulation can differ from the host's. A
+// missing or unreadable cpuinfo reports false.
+func ReportsHypervisorFlag(rootFS fs.FS) bool {
+	info, err := readCPUInfo(rootFS)
+	if err != nil {
+		return false
+	}
+	for _, fields := range info {
+		if _, ok := fields["flags"]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // readCPUInfo reads /proc/cpuinfo into its blocks' fields by CPU number.
 func readCPUInfo(fsys fs.FS) (map[int]map[string]string, error) {
 	b, err := fs.ReadFile(fsys, cpuInfoPath)

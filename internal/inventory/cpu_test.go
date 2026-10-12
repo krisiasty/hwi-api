@@ -615,3 +615,29 @@ func TestCPUJSON(t *testing.T) {
 		}
 	})
 }
+
+// Only x86's cpuinfo flags can carry a hypervisor bit. The answer comes
+// from the host's cpuinfo, not the agent's GOARCH: under user-mode
+// emulation an amd64 agent can read an arm64 host's Features.
+func TestReportsHypervisorFlag(t *testing.T) {
+	x86 := cpuHost{}
+	x86.cpuinfo(x86Block(0, "Intel(R) Xeon(R)", "fpu sse2", "0x2b000603"))
+	arm := cpuHost{}
+	arm.cpuinfo(cpuinfoBlock(0, "Features", "fp asimd aes", "CPU implementer", "0x41"))
+
+	for _, tc := range []struct {
+		name string
+		root fs.FS
+		want bool
+	}{
+		{"x86 flags", fstest.MapFS(x86), true},
+		{"arm64 Features", fstest.MapFS(arm), false},
+		{"no cpuinfo", fstest.MapFS{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ReportsHypervisorFlag(tc.root); got != tc.want {
+				t.Errorf("ReportsHypervisorFlag = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
