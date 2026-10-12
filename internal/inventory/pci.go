@@ -248,16 +248,20 @@ func (src pciSources) readDevice(address string) (PCIDevice, bool) {
 // pciCard identifies the card at an address: a VPD read from it is reported
 // again only while the same card is there. Its IDs name the card's model,
 // not the card, so the prober also forgets an address's VPD whenever a
-// probe finds it empty (vpdCache.retain). A same-model swap between two
-// probes, with the replacement powered down by the second, is beyond
-// either: nothing sysfs offers without waking the card tells them apart.
+// probe finds it empty (vpdCache.retain), finds another model there
+// (vpdCache.get), or finds the card awake but does not read it
+// (vpdReader.read). A same-model swap between two probes, with the
+// replacement powered down by the second, is beyond all three: nothing
+// sysfs offers without waking the card tells them apart.
 type pciCard struct {
 	address, vendor, device, subVendor, subDevice string
 }
 
 // vpdCache keeps, for each address, the VPD last read from the card there
-// while it was awake. It is a prober's own, kept across its probes, and
-// safe for concurrent probes.
+// while it was awake. It is a prober's own, kept across its probes. Its
+// methods are safe for concurrent use, but retain assumes the prober's
+// probes do not overlap, as the Refresher's per-subsystem slot ensures: an
+// older probe's retain would forget what a newer one has just read.
 type vpdCache struct {
 	mu   sync.Mutex
 	last map[string]cachedVPD
@@ -271,11 +275,20 @@ type cachedVPD struct {
 func newVPDCache() *vpdCache { return &vpdCache{last: map[string]cachedVPD{}} }
 
 // get is the VPD last read from card, if it was read from this very card.
+// A VPD read from another card at card's address is forgotten: that card
+// has been seen gone, and a later card of its model there may not be it.
 func (c *vpdCache) get(card pciCard) (*PCIVPD, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.last[card.address]
-	return e.vpd, ok && e.card == card
+	if !ok {
+		return nil, false
+	}
+	if e.card != card {
+		delete(c.last, card.address)
+		return nil, false
+	}
+	return e.vpd, true
 }
 
 // set records v as card's VPD, or, when v is nil, forgets the card's.
@@ -328,6 +341,9 @@ func (r *vpdReader) read(card pciCard, asleep bool) (*PCIVPD, string) {
 		return nil, "not read: the device is powered down, and reading its VPD would wake it"
 	}
 	if r.failed != nil {
+		// The card is awake, so it may be a same-model replacement that
+		// would have been read now; the cached VPD cannot vouch for it.
+		r.cache.set(card, nil)
 		return nil, fmt.Sprintf("not read: an earlier VPD read in this refresh failed (%v)", r.failed)
 	}
 	v, why := r.readHelper(card.address)
