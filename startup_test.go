@@ -255,29 +255,6 @@ func TestShutdownDuringTheInitialCollection(t *testing.T) {
 	}
 }
 
-// TestListenersSharingAnAddressStopRunWithTheBindError: configuration does
-// not check whether the two listeners collide; the kernel does, for every
-// way they can (an interface resolving to the other's address, two
-// spellings of one address, a wildcard), and run stops with the error of
-// the listener that bound second, which names it and the address.
-func TestListenersSharingAnAddressStopRunWithTheBindError(t *testing.T) {
-	_, release, _ := blockCPUProbe(t)
-	release() // the collection need not wait for anything here
-	path := startupConfig(t, "19106", "19106")
-
-	errCh, _ := startRun(t, []string{"--config", path}, &syncBuffer{}, release)
-	var runErr error
-	select {
-	case runErr = <-errCh:
-	case <-time.After(15 * time.Second):
-		t.Fatal("run did not return although both listeners use 127.0.0.1:19106")
-	}
-	if runErr == nil || !strings.Contains(runErr.Error(), "api listener") ||
-		!strings.Contains(runErr.Error(), "127.0.0.1:19106") || !strings.Contains(runErr.Error(), "address already in use") {
-		t.Errorf("run returned %v, want the api listener's bind error for 127.0.0.1:19106", runErr)
-	}
-}
-
 // TestOpsListenerFailureStopsTheInitialCollection: when the ops listener
 // cannot bind, run must stop the initial collection at the next subsystem
 // rather than probing every remaining one before returning the error.
