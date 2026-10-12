@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"maps"
 	"path"
 	"slices"
 	"strings"
@@ -762,6 +763,56 @@ func TestPCIProberReportsTheVPDLastReadWhileAwake(t *testing.T) {
 	setStatus("suspended")
 	if d := probe(); d.VPD != nil || d.VPDError != vpdPoweredDown {
 		t.Errorf("suspended after a failed read: vpd %+v, vpd_error %q; want none and %q", d.VPD, d.VPDError, vpdPoweredDown)
+	}
+}
+
+// PCI IDs name a card's model, not the card: a replacement of the same
+// model at the same address must not inherit the removed card's VPD. A
+// probe that finds the address empty forgets what was read there, so the
+// replacement, found powered down, is reported unread rather than with the
+// removed card's serial number.
+func TestPCIProberForgetsTheVPDOfARemovedCard(t *testing.T) {
+	m := withVPD()
+	privileged, asked := vpdHelper(func(helper.Request) (helper.Response, error) {
+		return helper.Response{Data: mlxVPD()}, nil
+	})
+	prober := NewPCIProber(m, testDB(t), privileged)
+	probe := func() *PCI {
+		t.Helper()
+		v, err := prober.Probe(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.(*PCI)
+	}
+
+	if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD == nil || d.VPD.SerialNumber != "MT2140X12345" {
+		t.Fatalf("awake: vpd %+v, vpd_error %q", d.VPD, d.VPDError)
+	}
+
+	// Unplug the card: its listing entry and its device directory go.
+	card := fstest.MapFS{}
+	for name, f := range m {
+		if name == pciDeviceDir("0000:3b:00.0") || strings.HasPrefix(name, connectXDir+"/") {
+			card[name] = f
+			delete(m, name)
+		}
+	}
+	for _, d := range probe().Devices {
+		if d.Address == "0000:3b:00.0" {
+			t.Fatalf("the unplugged card is still listed: %+v", d)
+		}
+	}
+
+	// A card of the same model goes in at the same address, and is
+	// suspended by the next probe.
+	maps.Copy(m, card)
+	m[connectXDir+"/power/runtime_status"] = &fstest.MapFile{Data: []byte("suspended\n")}
+	if d := pciDevice(t, probe(), "0000:3b:00.0"); d.VPD != nil || d.VPDError != vpdPoweredDown {
+		t.Errorf("replacement: vpd %+v, vpd_error %q; want none and %q", d.VPD, d.VPDError, vpdPoweredDown)
+	}
+	if *asked != 1 {
+		t.Errorf("the helper was asked %d times, want once: the replacement must not be woken", *asked)
 	}
 }
 

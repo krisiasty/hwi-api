@@ -159,11 +159,19 @@ func NewPCIProber(rootFS fs.FS, db *pciids.DB, privileged fs.FS) Prober {
 		}
 		out := &PCI{Devices: make([]PCIDevice, 0, len(entries))}
 		src := newPCISources(rootFS, db, privileged, cache)
+		present := make(map[string]bool, len(entries))
 		for _, e := range entries {
 			if d, ok := src.readDevice(e.Name()); ok {
 				out.Devices = append(out.Devices, d)
+				present[d.Address] = true
 			}
 		}
+		// A card this probe did not find has gone, and whatever appears at
+		// its address later may be another card of the same model, which
+		// pciCard cannot tell from it. Forget its VPD, so a replacement
+		// found powered down is reported unread, not with the removed
+		// card's identity.
+		cache.retain(present)
 		return out, nil
 	})
 }
@@ -238,7 +246,11 @@ func (src pciSources) readDevice(address string) (PCIDevice, bool) {
 }
 
 // pciCard identifies the card at an address: a VPD read from it is reported
-// again only while the same card is there.
+// again only while the same card is there. Its IDs name the card's model,
+// not the card, so the prober also forgets an address's VPD whenever a
+// probe finds it empty (vpdCache.retain). A same-model swap between two
+// probes, with the replacement powered down by the second, is beyond
+// either: nothing sysfs offers without waking the card tells them apart.
 type pciCard struct {
 	address, vendor, device, subVendor, subDevice string
 }
@@ -275,6 +287,17 @@ func (c *vpdCache) set(card pciCard, v *PCIVPD) {
 		return
 	}
 	c.last[card.address] = cachedVPD{card: card, vpd: v}
+}
+
+// retain forgets the VPD of every address not in present.
+func (c *vpdCache) retain(present map[string]bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for address := range c.last {
+		if !present[address] {
+			delete(c.last, address)
+		}
+	}
 }
 
 // vpdReader reads the devices' VPD through privileged, the helper's file
