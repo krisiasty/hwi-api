@@ -232,6 +232,30 @@ func TestValidateRejectsBrokenConfigurations(t *testing.T) {
 	}
 }
 
+func TestValidDigestHex(t *testing.T) {
+	good := strings.Repeat("0123456789abcdef", 4)
+	for _, tc := range []struct {
+		name string
+		hex  string
+		want bool
+	}{
+		{"64 lowercase hex characters", good, true},
+		{"empty", "", false},
+		{"one short", good[:63], false},
+		{"one long", good + "0", false},
+		{"a non-hex letter", good[:63] + "g", false},
+		{"uppercase hex", strings.ToUpper(good), false},
+		{"a space", " " + good[1:], false},
+		{"a multi-byte character", good[:62] + "é", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := validDigestHex(tc.hex); got != tc.want {
+				t.Errorf("validDigestHex(%q) = %v, want %v", tc.hex, got, tc.want)
+			}
+		})
+	}
+}
+
 // A malformed digest may be a live token pasted into the wrong field, and
 // the error ends up on stderr and in the journal, so it names the entry by
 // position and must not contain any of its characters.

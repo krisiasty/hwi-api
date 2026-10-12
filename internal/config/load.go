@@ -49,21 +49,10 @@ func validCredentialName(name string) bool {
 	return true
 }
 
-// validDigestHex reports whether hex is exactly digestHexLen lowercase hex
+// validDigestHex reports whether s is exactly digestHexLen lowercase hex
 // characters.
-func validDigestHex(hex string) bool {
-	if len(hex) != digestHexLen {
-		return false
-	}
-	for i := 0; i < len(hex); i++ {
-		c := hex[i]
-		switch {
-		case c >= '0' && c <= '9', c >= 'a' && c <= 'f':
-		default:
-			return false
-		}
-	}
-	return true
+func validDigestHex(s string) bool {
+	return len(s) == digestHexLen && strings.Trim(s, "0123456789abcdef") == ""
 }
 
 // ResolvePath turns a configured path into a filesystem path. A
