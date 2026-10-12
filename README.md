@@ -268,7 +268,7 @@ directives) instead of a literal path.
 
 | Key                                | Default                        | Notes                                                                                          |
 | ----------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `api.bind.addresses`                | `[]`                             | Literal addresses to bind. Empty means every address. May be combined with `interfaces`.        |
+| `api.bind.addresses`                | `[]`                             | Literal addresses to bind. May be combined with `interfaces`; with both empty, the listener binds every address. |
 | `api.bind.interfaces`               | `[]`                             | Interface names, resolved to their current addresses at startup.                                |
 | `api.bind.port`                     | `8096`                           |                                                                                                  |
 | `api.tls.enabled`                   | `true`                           | Set `false` only when a trusted local proxy already terminates TLS in front of this agent; logs a startup warning. |
