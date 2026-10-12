@@ -67,6 +67,14 @@ func TestEncodersRefuseWhatTheirLengthFieldCannotHold(t *testing.T) {
 	}
 }
 
+// u32Attr skips the length check, since its attribute is always 8 bytes,
+// but must encode exactly as encodeAttr does.
+func TestU32AttrEncodesAsEncodeAttr(t *testing.T) {
+	if got, want := u32Attr(5, 0x01020304), testAttr(t, 5, binary.NativeEndian.AppendUint32(nil, 0x01020304)); !bytes.Equal(got, want) {
+		t.Errorf("u32Attr = %x, encodeAttr = %x", got, want)
+	}
+}
+
 func TestMessageRoundTrip(t *testing.T) {
 	payload := append(u32Attr(1, 7), testStringAttr(t, 2, "eth0")...)
 	b := testMessage(t, 0x1b, 0x5, 42, payload)

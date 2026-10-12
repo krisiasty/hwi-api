@@ -38,9 +38,13 @@ func u8Attr(t testing.TB, typ uint16, v uint8) []byte {
 }
 
 func TestFamilyRequest(t *testing.T) {
-	req, err := familyRequest(7)
-	if err != nil {
-		t.Fatalf("familyRequest: %v", err)
+	req := familyRequest(7)
+	// It is built without the length checks, from fixed input, so it must
+	// be exactly what the checked encoders build.
+	want := testMessage(t, genlIDCtrl, nlmFRequest, 7,
+		append([]byte{ctrlCmdGetFamily, genlVersion, 0, 0}, testStringAttr(t, ctrlAttrFamilyName, ethtoolFamilyName)...))
+	if !bytes.Equal(req, want) {
+		t.Errorf("familyRequest = %x, want %x", req, want)
 	}
 	msgs, err := parseMessages(req)
 	if err != nil || len(msgs) != 1 {

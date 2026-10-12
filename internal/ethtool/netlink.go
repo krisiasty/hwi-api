@@ -43,31 +43,42 @@ func align4(n int) int {
 // encodeMessage returns a netlink message with a zero port id, padded to a 4-byte boundary; nlmsg_len counts the header and payload but not the
 // padding, as the kernel's NLMSG_LENGTH does. A message too long for nlmsg_len is an error: truncating the length would corrupt the request.
 func encodeMessage(typ, flags uint16, seq uint32, payload []byte) ([]byte, error) {
-	n := nlmsgHdrLen + len(payload)
-	if uint64(n) > math.MaxUint32 {
+	if n := nlmsgHdrLen + len(payload); uint64(n) > math.MaxUint32 {
 		return nil, fmt.Errorf("netlink message of %d bytes overflows nlmsg_len", n)
 	}
+	return newMessage(typ, flags, seq, payload), nil
+}
+
+// newMessage is encodeMessage without the length check: it is the only place the message header is written. Only a payload of a fixed, small
+// size, as familyRequest's, may reach it directly; anything else goes through encodeMessage.
+func newMessage(typ, flags uint16, seq uint32, payload []byte) []byte {
+	n := nlmsgHdrLen + len(payload)
 	b := make([]byte, nlmsgHdrLen, align4(n))
 	binary.NativeEndian.PutUint32(b[0:], uint32(n))
 	binary.NativeEndian.PutUint16(b[4:], typ)
 	binary.NativeEndian.PutUint16(b[6:], flags)
 	binary.NativeEndian.PutUint32(b[8:], seq)
 	b = append(b, payload...)
-	return b[:align4(n)], nil // the capacity was allocated zeroed, so this exposes zero padding
+	return b[:align4(n)] // the capacity was allocated zeroed, so this exposes zero padding
 }
 
 // encodeAttr returns one attribute followed by the zero padding that brings it to a 4-byte boundary. An attribute too long for nla_len is an
 // error: truncating the length would corrupt the request.
 func encodeAttr(typ uint16, data []byte) ([]byte, error) {
-	n := nlaHdrLen + len(data)
-	if n > math.MaxUint16 {
+	if n := nlaHdrLen + len(data); n > math.MaxUint16 {
 		return nil, fmt.Errorf("netlink attribute of %d bytes overflows nla_len", n)
 	}
-	b := make([]byte, nlaHdrLen, align4(n))
-	binary.NativeEndian.PutUint16(b[0:], uint16(n))
-	binary.NativeEndian.PutUint16(b[2:], typ)
+	return appendAttr(nil, typ, data), nil
+}
+
+// appendAttr is encodeAttr without the length check, appending to b: it is the only place the attribute header is written. Only data of a
+// fixed, small size, as u32Attr's and familyRequest's, may reach it directly; anything else goes through encodeAttr.
+func appendAttr(b []byte, typ uint16, data []byte) []byte {
+	n := nlaHdrLen + len(data)
+	b = binary.NativeEndian.AppendUint16(b, uint16(n))
+	b = binary.NativeEndian.AppendUint16(b, typ)
 	b = append(b, data...)
-	return b[:align4(n)], nil
+	return append(b, make([]byte, align4(n)-n)...)
 }
 
 // encodeNested returns a nest attribute holding attrs, which are already encoded (and so already padded). Attributes that fit on their own can
@@ -76,14 +87,9 @@ func encodeNested(typ uint16, attrs ...[]byte) ([]byte, error) {
 	return encodeAttr(typ|nlaFNested, bytes.Join(attrs, nil))
 }
 
-// u32Attr returns a 32-bit attribute. It is always 8 bytes, a 4-byte header and the value, already aligned, so unlike the other encoders it
-// cannot fail.
+// u32Attr returns a 32-bit attribute. It is always 8 bytes, so unlike the other encoders it cannot fail.
 func u32Attr(typ uint16, v uint32) []byte {
-	b := make([]byte, nlaHdrLen+4)
-	binary.NativeEndian.PutUint16(b[0:], nlaHdrLen+4)
-	binary.NativeEndian.PutUint16(b[2:], typ)
-	binary.NativeEndian.PutUint32(b[4:], v)
-	return b
+	return appendAttr(nil, typ, binary.NativeEndian.AppendUint32(nil, v))
 }
 
 // stringAttr returns a NUL-terminated string attribute, the NLA_NUL_STRING form the kernel's policies expect.

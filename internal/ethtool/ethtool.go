@@ -138,13 +138,15 @@ const (
 	linuxEOPNOTSUPP = 95
 )
 
-// familyRequest asks the generic-netlink controller for the ethtool family's id.
-func familyRequest(seq uint32) ([]byte, error) {
-	name, err := stringAttr(ctrlAttrFamilyName, ethtoolFamilyName)
-	if err != nil {
-		return nil, err
-	}
-	return encodeMessage(genlIDCtrl, nlmFRequest, seq, append([]byte{ctrlCmdGetFamily, genlVersion, 0, 0}, name...))
+// maxDevNameLen is the longest interface name ETHTOOL_A_HEADER_DEV_NAME's kernel policy accepts: ALTIFNAMSIZ - 1, room for an alternative
+// name and not only for IFNAMSIZ's 15 bytes.
+const maxDevNameLen = 127
+
+// familyRequest asks the generic-netlink controller for the ethtool family's id. All of it but seq is fixed, and 32 bytes long, so it is built
+// without the length checks that a request carrying caller input needs; TestFamilyRequest checks it against them.
+func familyRequest(seq uint32) []byte {
+	payload := appendAttr([]byte{ctrlCmdGetFamily, genlVersion, 0, 0}, ctrlAttrFamilyName, append([]byte(ethtoolFamilyName), 0))
+	return newMessage(genlIDCtrl, nlmFRequest, seq, payload)
 }
 
 // parseFamilyID returns the family id from the controller's reply to familyRequest; the controller answers ENOENT for a family it does not know.
@@ -174,16 +176,26 @@ func parseFamilyID(msgs []message) (uint16, error) {
 // request returns an ethtool query of one interface. The header names it by both index and name: the kernel answers ENODEV when they do
 // not match, so an index reused by another interface since the caller read it is not answered for. Header flags of 0 ask for verbose
 // bitsets, which list each bit with its name.
+//
+// A name the kernel would not accept is refused before anything is encoded. That also keeps every attribute and the message far below their
+// length fields' limits; the encoders check anyway, and any error they return is the request's.
 func request(family uint16, cmd uint8, seq uint32, ifindex uint32, name string) ([]byte, error) {
+	if len(name) == 0 || len(name) > maxDevNameLen {
+		return nil, fmt.Errorf("interface name of %d bytes: the kernel accepts 1 to %d", len(name), maxDevNameLen)
+	}
 	dev, err := stringAttr(ethtoolAHeaderDevName, name)
 	if err != nil {
-		return nil, fmt.Errorf("interface name: %w", err)
+		return nil, fmt.Errorf("encoding the request: %w", err)
 	}
 	header, err := encodeNested(ethtoolAHeader, u32Attr(ethtoolAHeaderDevIndex, ifindex), dev, u32Attr(ethtoolAHeaderFlags, 0))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("encoding the request: %w", err)
 	}
-	return encodeMessage(family, nlmFRequest, seq, append([]byte{cmd, genlVersion, 0, 0}, header...))
+	b, err := encodeMessage(family, nlmFRequest, seq, append([]byte{cmd, genlVersion, 0, 0}, header...))
+	if err != nil {
+		return nil, fmt.Errorf("encoding the request: %w", err)
+	}
+	return b, nil
 }
 
 // replyError returns the first NLMSG_ERROR with a nonzero code as an error: ErrNotSupported, ErrNoDevice, or the syscall.Errno. An ACK (code 0)

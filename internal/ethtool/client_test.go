@@ -358,17 +358,27 @@ func TestReplyMessages(t *testing.T) {
 	}
 }
 
-// A name no interface can have, too long for its attribute, fails that one
-// query with an error, before anything is sent; it never takes the process
-// down.
-func TestQueryRefusesAnOverlongInterfaceNameWithoutSending(t *testing.T) {
-	c, f := newFakeClient(t, nil)
-	sent := len(f.sent)
-	_, err := c.Features(4, strings.Repeat("x", math.MaxUint16))
-	if err == nil || !strings.Contains(err.Error(), "interface name") {
-		t.Errorf("Features = %v, want an interface name error", err)
-	}
-	if len(f.sent) != sent {
-		t.Errorf("%d requests sent for the overlong name, want none", len(f.sent)-sent)
+// A name the kernel would not accept, of any length, fails that one query
+// with the same interface-name error, before anything is sent, and uses no
+// sequence number: the next query is sent under the next one.
+func TestQueryRefusesANameTheKernelWouldNot(t *testing.T) {
+	features := genlReply(t, ethtoolMsgFeaturesGetReply,
+		verboseBitset(t, ethtoolAFeaturesHW, true, testBit{index: 1, name: "rx-checksum"}),
+		verboseBitset(t, ethtoolAFeaturesActive, true, testBit{index: 1, name: "rx-checksum"}))
+	for _, n := range []int{0, maxDevNameLen + 1, 65525, math.MaxUint16} {
+		c, f := newFakeClient(t, map[uint8][]message{ethtoolMsgFeaturesGet: features})
+		_, err := c.Features(4, strings.Repeat("x", n))
+		if err == nil || !strings.Contains(err.Error(), "interface name") {
+			t.Errorf("%d-byte name: Features = %v, want an interface name error", n, err)
+		}
+		if len(f.sent) != 1 {
+			t.Errorf("%d-byte name: %d requests sent after the family lookup, want none", n, len(f.sent)-1)
+		}
+		if _, err := c.Features(4, strings.Repeat("x", maxDevNameLen)); err != nil {
+			t.Fatalf("%d-byte name, then the longest valid one: Features = %v", n, err)
+		}
+		if got := f.sent[len(f.sent)-1].seq; got != 2 {
+			t.Errorf("%d-byte name: the next query was sent under seq %d, want 2", n, got)
+		}
 	}
 }
