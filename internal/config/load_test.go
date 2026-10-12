@@ -251,6 +251,7 @@ func TestValidCredentialName(t *testing.T) {
 		{"base64 padding", "eyJhbGciOi==", false},
 		{"a non-ASCII letter", "certé", false},
 		{"invalid UTF-8", "cert\xff", false},
+		{"a trailing newline", "cert.pem\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := validCredentialName(tc.in); got != tc.want {
@@ -275,6 +276,7 @@ func TestValidDigestHex(t *testing.T) {
 		{"uppercase hex", strings.ToUpper(good), false},
 		{"a space", " " + good[1:], false},
 		{"a multi-byte character", good[:62] + "é", false},
+		{"a trailing newline", good[:63] + "\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := validDigestHex(tc.hex); got != tc.want {

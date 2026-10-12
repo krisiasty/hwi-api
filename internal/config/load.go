@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -23,6 +24,14 @@ const digestHexLen = 64
 // credentialNameMaxLen is systemd's own limit on a credential identifier.
 const credentialNameMaxLen = 64
 
+// credentialNamePattern and digestHexPattern are the characters a
+// credential name and a token digest's hex part may hold. Their lengths are
+// checked against the constants above, before the pattern scans anything.
+var (
+	credentialNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+	digestHexPattern      = regexp.MustCompile(`^[0-9a-f]+$`)
+)
+
 // validCredentialName reports whether name is a systemd credential
 // identifier: letters, digits, underscore, hyphen and dot, capped at
 // credentialNameMaxLen, and neither "." nor "..". The dot is there for
@@ -35,20 +44,13 @@ const credentialNameMaxLen = 64
 // printed, and with "." and ".." they also cover the path-traversal
 // rejections ("", ".", "..", "/", "\").
 func validCredentialName(name string) bool {
-	return name != "" && name != "." && name != ".." && len(name) <= credentialNameMaxLen &&
-		strings.TrimFunc(name, credentialNameChar) == ""
-}
-
-// credentialNameChar reports whether r may appear in a credential name: an
-// ASCII letter or digit, "_", "-" or ".".
-func credentialNameChar(r rune) bool {
-	return 'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' || r == '_' || r == '-' || r == '.'
+	return len(name) <= credentialNameMaxLen && name != "." && name != ".." && credentialNamePattern.MatchString(name)
 }
 
 // validDigestHex reports whether s is exactly digestHexLen lowercase hex
 // characters.
 func validDigestHex(s string) bool {
-	return len(s) == digestHexLen && strings.Trim(s, "0123456789abcdef") == ""
+	return len(s) == digestHexLen && digestHexPattern.MatchString(s)
 }
 
 // ResolvePath turns a configured path into a filesystem path. A
