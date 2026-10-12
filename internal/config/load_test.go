@@ -232,6 +232,34 @@ func TestValidateRejectsBrokenConfigurations(t *testing.T) {
 	}
 }
 
+func TestValidCredentialName(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"letters, digits, underscore, hyphen and dot", "TLS_cert-2.pem", true},
+		{"a dot alone among others", ".hidden", true},
+		{"the longest allowed", strings.Repeat("a", 64), true},
+		{"empty", "", false},
+		{"dot", ".", false},
+		{"dot dot", "..", false},
+		{"one too long", strings.Repeat("a", 65), false},
+		{"a slash", "tls/cert.pem", false},
+		{"a backslash", `tls\cert.pem`, false},
+		{"a space", "tls cert.pem", false},
+		{"base64 padding", "eyJhbGciOi==", false},
+		{"a non-ASCII letter", "certé", false},
+		{"invalid UTF-8", "cert\xff", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := validCredentialName(tc.in); got != tc.want {
+				t.Errorf("validCredentialName(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestValidDigestHex(t *testing.T) {
 	good := strings.Repeat("0123456789abcdef", 4)
 	for _, tc := range []struct {

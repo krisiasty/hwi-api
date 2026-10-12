@@ -35,18 +35,14 @@ const credentialNameMaxLen = 64
 // printed, and with "." and ".." they also cover the path-traversal
 // rejections ("", ".", "..", "/", "\").
 func validCredentialName(name string) bool {
-	if name == "" || name == "." || name == ".." || len(name) > credentialNameMaxLen {
-		return false
-	}
-	for i := 0; i < len(name); i++ {
-		c := name[i]
-		switch {
-		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '_', c == '-', c == '.':
-		default:
-			return false
-		}
-	}
-	return true
+	return name != "" && name != "." && name != ".." && len(name) <= credentialNameMaxLen &&
+		strings.TrimFunc(name, credentialNameChar) == ""
+}
+
+// credentialNameChar reports whether r may appear in a credential name: an
+// ASCII letter or digit, "_", "-" or ".".
+func credentialNameChar(r rune) bool {
+	return 'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' || r == '_' || r == '-' || r == '.'
 }
 
 // validDigestHex reports whether s is exactly digestHexLen lowercase hex
