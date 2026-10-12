@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -390,12 +391,13 @@ func TestValidateRejectsAuthEnabledWithNoAuthBlockAtAll(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	src := "api:\n" +
-		"  tls:\n" +
-		"    cert_file: " + cert + "\n" +
-		"    key_file: " + key + "\n" +
-		"  access:\n" +
-		"    allow: [\"10.0.0.0/8\"]\n"
+	src := fmt.Sprintf(`api:
+  tls:
+    cert_file: %s
+    key_file: %s
+  access:
+    allow: ["10.0.0.0/8"]
+`, cert, key)
 
 	cfg, err := Decode(strings.NewReader(src))
 	if err != nil {

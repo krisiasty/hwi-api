@@ -70,7 +70,7 @@ func ResolvePath(s string) (string, error) {
 		// Report only the length: name may be a live secret an operator
 		// pasted into the wrong field, and none of it is safe to echo.
 		return "", fmt.Errorf("credential name is not a valid identifier "+
-			"(%d characters; expected letters, digits, \"_\", \"-\" or \".\", up to 64)", len(name))
+			`(%d characters; expected letters, digits, "_", "-" or ".", up to 64)`, len(name))
 	}
 	dir := os.Getenv("CREDENTIALS_DIRECTORY")
 	if dir == "" {
@@ -155,7 +155,7 @@ func (c Config) Validate() ([]string, error) {
 	switch c.API.TLS.MinVersion {
 	case "1.2", "1.3":
 	default:
-		return nil, fmt.Errorf("api.tls.min_version %q: want \"1.2\" or \"1.3\"", c.API.TLS.MinVersion)
+		return nil, fmt.Errorf(`api.tls.min_version %q: want "1.2" or "1.3"`, c.API.TLS.MinVersion)
 	}
 	if c.API.TLS.Enabled {
 		if err := validateFilePath("api.tls.cert_file", c.API.TLS.CertFile); err != nil {

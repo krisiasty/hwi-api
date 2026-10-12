@@ -122,7 +122,7 @@ func TestREADMEListsTheDefaultIntervals(t *testing.T) {
 	}
 	start := strings.Index(string(b), "| Subsystems")
 	if start < 0 {
-		t.Fatal("README has no default-interval table starting \"| Subsystems\"")
+		t.Fatal(`README has no default-interval table starting "| Subsystems"`)
 	}
 	table := string(b)[start:]
 	table = table[:strings.Index(table, "\n\n")]

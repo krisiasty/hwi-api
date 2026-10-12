@@ -24,11 +24,11 @@ func (d Duration) Duration() time.Duration { return time.Duration(d) }
 func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 	var s string
 	if err := node.Decode(&s); err != nil {
-		return errors.New("must be a duration string such as \"30s\" or \"5m\"")
+		return errors.New(`must be a duration string such as "30s" or "5m"`)
 	}
 	parsed, err := time.ParseDuration(s)
 	if err != nil {
-		return fmt.Errorf("invalid duration %q: it needs a unit, such as \"30s\" or \"5m\"", s)
+		return fmt.Errorf(`invalid duration %q: it needs a unit, such as "30s" or "5m"`, s)
 	}
 	*d = Duration(parsed)
 	return nil
