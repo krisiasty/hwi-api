@@ -159,11 +159,9 @@ func NewPCIProber(rootFS fs.FS, db *pciids.DB, privileged fs.FS) Prober {
 		}
 		out := &PCI{Devices: make([]PCIDevice, 0, len(entries))}
 		src := newPCISources(rootFS, db, privileged, cache)
-		present := make(map[string]bool, len(entries))
 		for _, e := range entries {
 			if d, ok := src.readDevice(e.Name()); ok {
 				out.Devices = append(out.Devices, d)
-				present[d.Address] = true
 			}
 		}
 		// A card this probe did not find has gone, and whatever appears at
@@ -171,7 +169,7 @@ func NewPCIProber(rootFS fs.FS, db *pciids.DB, privileged fs.FS) Prober {
 		// pciCard cannot tell from it. Forget its VPD, so a replacement
 		// found powered down is reported unread, not with the removed
 		// card's identity.
-		cache.retain(present)
+		cache.retain(out.Devices)
 		return out, nil
 	})
 }
@@ -302,8 +300,14 @@ func (c *vpdCache) set(card pciCard, v *PCIVPD) {
 	c.last[card.address] = cachedVPD{card: card, vpd: v}
 }
 
-// retain forgets the VPD of every address not in present.
-func (c *vpdCache) retain(present map[string]bool) {
+// retain forgets the VPD of every address none of devices is at. The
+// lookup is built before the lock is taken, so a probe holds it no longer
+// than the deletions take.
+func (c *vpdCache) retain(devices []PCIDevice) {
+	present := make(map[string]bool, len(devices))
+	for _, d := range devices {
+		present[d.Address] = true
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for address := range c.last {
