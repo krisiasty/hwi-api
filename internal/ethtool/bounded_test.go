@@ -33,8 +33,8 @@ type stubExchanger struct {
 func newStubExchanger(t *testing.T, reply []message) *stubExchanger {
 	t.Helper()
 	s := &stubExchanger{
-		family: genlReply(t, ctrlCmdNewFamily, stringAttr(ctrlAttrFamilyName, ethtoolFamilyName),
-			encodeAttr(ctrlAttrFamilyID, binary.NativeEndian.AppendUint16(nil, testFamily))),
+		family: genlReply(t, ctrlCmdNewFamily, testStringAttr(t, ctrlAttrFamilyName, ethtoolFamilyName),
+			testAttr(t, ctrlAttrFamilyID, binary.NativeEndian.AppendUint16(nil, testFamily))),
 		reply:   reply,
 		release: make(chan struct{}),
 	}
@@ -269,7 +269,7 @@ func TestBoundedCloseDuringExchange(t *testing.T) {
 
 func TestBoundedRoundTripAnswers(t *testing.T) {
 	s := newStubExchanger(t, genlReply(t, ethtoolMsgFeaturesGetReply,
-		verboseBitset(ethtoolAFeaturesActive, true, testBit{index: 1, name: "rx-checksum"})))
+		verboseBitset(t, ethtoolAFeaturesActive, true, testBit{index: 1, name: "rx-checksum"})))
 	s.unblock()
 	c := mustDialStub(t, context.Background(), s, testTimeout, testGrace)
 	features, err := c.Features(1, "eth1")

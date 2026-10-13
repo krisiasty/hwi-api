@@ -3,12 +3,53 @@ package ethtool
 import (
 	"bytes"
 	"encoding/binary"
+	"math"
 	"testing"
 )
 
+// The fixture encoders build what the kernel sends, for the parsers to read: attributes and messages of any shape, which the agent itself
+// never sends. They use the production header writers, and a fixture too long for its length field fails the test rather than being
+// truncated.
+
+func testAttr(t testing.TB, typ uint16, data []byte) []byte {
+	t.Helper()
+	n := nlaHdrLen + len(data)
+	if n > math.MaxUint16 {
+		t.Fatalf("a fixture attribute of %d bytes overflows nla_len", n)
+	}
+	b := appendAttrHeader(make([]byte, 0, align4(n)), typ, uint16(n))
+	b = append(b, data...)
+	return b[:align4(n)] // the capacity was allocated zeroed, so this exposes zero padding
+}
+
+func testNested(t testing.TB, typ uint16, attrs ...[]byte) []byte {
+	t.Helper()
+	return testAttr(t, typ|nlaFNested, bytes.Join(attrs, nil))
+}
+
+func testStringAttr(t testing.TB, typ uint16, s string) []byte {
+	t.Helper()
+	return testAttr(t, typ, append([]byte(s), 0))
+}
+
+func u32Attr(typ uint16, v uint32) []byte {
+	return appendU32Attr(nil, typ, v)
+}
+
+func testMessage(t testing.TB, typ, flags uint16, seq uint32, payload []byte) []byte {
+	t.Helper()
+	n := nlmsgHdrLen + len(payload)
+	if uint64(n) > math.MaxUint32 {
+		t.Fatalf("a fixture message of %d bytes overflows nlmsg_len", n)
+	}
+	b := appendMessageHeader(make([]byte, 0, align4(n)), typ, flags, seq, uint32(n))
+	b = append(b, payload...)
+	return b[:align4(n)]
+}
+
 func TestMessageRoundTrip(t *testing.T) {
-	payload := append(u32Attr(1, 7), stringAttr(2, "eth0")...)
-	b := encodeMessage(0x1b, 0x5, 42, payload)
+	payload := append(u32Attr(1, 7), testStringAttr(t, 2, "eth0")...)
+	b := testMessage(t, 0x1b, 0x5, 42, payload)
 	if len(b)%4 != 0 {
 		t.Fatalf("encoded message is %d bytes, not 4-byte aligned", len(b))
 	}
@@ -31,14 +72,14 @@ func TestMessageRoundTrip(t *testing.T) {
 
 func TestParseMessagesUnalignedPayload(t *testing.T) {
 	// A 5-byte payload makes nlmsg_len 21; the encoder pads the buffer to 24 and the parser hands back exactly the 5 bytes.
-	b := encodeMessage(1, 0, 1, []byte{1, 2, 3, 4, 5})
+	b := testMessage(t, 1, 0, 1, []byte{1, 2, 3, 4, 5})
 	if got := binary.NativeEndian.Uint32(b); got != 21 {
 		t.Errorf("nlmsg_len = %d, want 21 (header plus payload, padding excluded)", got)
 	}
 	if len(b) != 24 {
 		t.Errorf("buffer is %d bytes, want 24", len(b))
 	}
-	msgs, err := parseMessages(append(b, encodeMessage(2, 0, 2, nil)...))
+	msgs, err := parseMessages(append(b, testMessage(t, 2, 0, 2, nil)...))
 	if err != nil {
 		t.Fatalf("parseMessages: %v", err)
 	}
@@ -48,7 +89,7 @@ func TestParseMessagesUnalignedPayload(t *testing.T) {
 }
 
 func TestParseMessagesTwoInOneBuffer(t *testing.T) {
-	b := append(encodeMessage(0x1b, 0, 1, u32Attr(1, 10)), encodeMessage(3, 2, 1, []byte{0, 0, 0, 0})...)
+	b := append(testMessage(t, 0x1b, 0, 1, u32Attr(1, 10)), testMessage(t, 3, 2, 1, []byte{0, 0, 0, 0})...)
 	msgs, err := parseMessages(b)
 	if err != nil {
 		t.Fatalf("parseMessages: %v", err)
@@ -69,7 +110,7 @@ func TestParseMessagesTwoInOneBuffer(t *testing.T) {
 }
 
 func TestParseMessagesRejectsBadLength(t *testing.T) {
-	valid := encodeMessage(1, 0, 1, u32Attr(1, 1))
+	valid := testMessage(t, 1, 0, 1, u32Attr(1, 1))
 	withLen := func(n uint32) []byte {
 		b := bytes.Clone(valid)
 		binary.NativeEndian.PutUint32(b, n)
@@ -102,7 +143,7 @@ func TestParseMessagesEmpty(t *testing.T) {
 }
 
 func TestAttributePadding(t *testing.T) {
-	five := encodeAttr(1, []byte{1, 2, 3, 4, 5})
+	five := testAttr(t, 1, []byte{1, 2, 3, 4, 5})
 	if len(five) != 12 {
 		t.Fatalf("5-byte attribute encodes to %d bytes, want 12 (4 header, 5 data, 3 padding)", len(five))
 	}
@@ -130,7 +171,7 @@ func TestAttributePadding(t *testing.T) {
 
 func TestAttributeLastUnpadded(t *testing.T) {
 	// The final attribute of a buffer may end without its padding; the parser must not demand bytes that are not there.
-	b := encodeAttr(1, []byte{9})[:5]
+	b := testAttr(t, 1, []byte{9})[:5]
 	attrs, err := parseAttributes(b)
 	if err != nil || len(attrs) != 1 {
 		t.Fatalf("parseAttributes = %v, %v; want one attribute", attrs, err)
@@ -141,7 +182,7 @@ func TestAttributeLastUnpadded(t *testing.T) {
 }
 
 func TestNestedAttributes(t *testing.T) {
-	b := encodeNested(1, u32Attr(1, 3), stringAttr(2, "eno1"), encodeNested(3, u32Attr(1, 7)))
+	b := testNested(t, 1, u32Attr(1, 3), testStringAttr(t, 2, "eno1"), testNested(t, 3, u32Attr(1, 7)))
 	if got := binary.NativeEndian.Uint16(b[2:]); got != 1|nlaFNested {
 		t.Errorf("nest type on the wire = %#x, want %#x", got, 1|nlaFNested)
 	}
@@ -176,7 +217,7 @@ func TestNestedAttributes(t *testing.T) {
 }
 
 func TestAttributeTypeFlagsMasked(t *testing.T) {
-	b := encodeAttr(5|nlaFNested|nlaFNetByteorder, []byte{1, 2, 3, 4})
+	b := testAttr(t, 5|nlaFNested|nlaFNetByteorder, []byte{1, 2, 3, 4})
 	attrs, err := parseAttributes(b)
 	if err != nil || len(attrs) != 1 {
 		t.Fatalf("parseAttributes = %v, %v; want one", attrs, err)
@@ -215,7 +256,7 @@ func TestParseAttributesRejectsOverrun(t *testing.T) {
 func TestParseAttributesRejectsChildOverrunningParent(t *testing.T) {
 	// The child's nla_len of 12 runs 4 bytes past its 8-byte parent into the attribute that follows the nest; those bytes exist in the buffer, so
 	// only the parent's bound stops the child from swallowing them.
-	nest := encodeNested(1, u32Attr(2, 1))
+	nest := testNested(t, 1, u32Attr(2, 1))
 	binary.NativeEndian.PutUint16(nest[nlaHdrLen:], 12)
 	outer, err := parseAttributes(append(nest, u32Attr(3, 5)...))
 	if err != nil || len(outer) != 2 {
@@ -256,7 +297,7 @@ func TestAttributeScalars(t *testing.T) {
 }
 
 func TestStringAttr(t *testing.T) {
-	b := stringAttr(2, "ethtool")
+	b := testStringAttr(t, 2, "ethtool")
 	if got := binary.NativeEndian.Uint16(b); got != 4+8 {
 		t.Errorf("nla_len = %d, want 12 (header plus 7 characters plus NUL)", got)
 	}
@@ -279,11 +320,11 @@ func TestStringAttr(t *testing.T) {
 }
 
 func TestErrorCode(t *testing.T) {
-	request := encodeMessage(0x1b, 1|4, 9, nil)
+	request := testMessage(t, 0x1b, 1|4, 9, nil)
 	errMsg := func(code int32) message {
 		payload := binary.NativeEndian.AppendUint32(nil, uint32(code))
 		payload = append(payload, request[:16]...)
-		msgs, err := parseMessages(encodeMessage(nlmsgError, 0, 9, payload))
+		msgs, err := parseMessages(testMessage(t, nlmsgError, 0, 9, payload))
 		if err != nil || len(msgs) != 1 {
 			t.Fatalf("parseMessages = %v, %v", msgs, err)
 		}
@@ -305,9 +346,9 @@ func TestErrorCode(t *testing.T) {
 }
 
 func FuzzParseMessages(f *testing.F) {
-	f.Add(encodeMessage(0x1b, 0, 1, encodeNested(1, u32Attr(1, 2), stringAttr(2, "eth0"))))
-	f.Add(append(encodeMessage(1, 0, 1, []byte{1, 2, 3, 4, 5}), encodeMessage(3, 2, 1, nil)...))
-	f.Add(encodeMessage(nlmsgError, 0, 1, binary.NativeEndian.AppendUint32(nil, uint32(0xffffffa1))))
+	f.Add(testMessage(f, 0x1b, 0, 1, testNested(f, 1, u32Attr(1, 2), testStringAttr(f, 2, "eth0"))))
+	f.Add(append(testMessage(f, 1, 0, 1, []byte{1, 2, 3, 4, 5}), testMessage(f, 3, 2, 1, nil)...))
+	f.Add(testMessage(f, nlmsgError, 0, 1, binary.NativeEndian.AppendUint32(nil, uint32(0xffffffa1))))
 	f.Add([]byte{})
 	f.Fuzz(func(t *testing.T, b []byte) {
 		msgs, err := parseMessages(b)

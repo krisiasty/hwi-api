@@ -21,7 +21,8 @@ type conn interface {
 // "fec"), so that it reads on its own; errors.Is still finds ErrNotSupported, ErrNoDevice or os.ErrDeadlineExceeded through it.
 //
 // Every query names the interface by both its index and its name, as sysfs lists them; the kernel answers ErrNoDevice when they do not
-// match, such as after a rename, rather than about whichever interface now has the index.
+// match, such as after a rename, rather than about whichever interface now has the index. A name no interface can have gets ErrNoDevice
+// without being sent.
 type Client struct {
 	c      conn
 	family uint16
@@ -42,10 +43,15 @@ func newClient(c conn) (*Client, error) {
 	return cl, nil
 }
 
-// query sends one ethtool GET of the interface under the next sequence number and returns its reply.
+// query sends one ethtool GET of the interface under the next sequence number and returns its reply. A request that cannot be built is not
+// sent and uses no sequence number.
 func (c *Client) query(cmd uint8, ifindex uint32, name string) ([]message, error) {
+	req, err := request(c.family, cmd, c.seq+1, ifindex, name)
+	if err != nil {
+		return nil, err
+	}
 	c.seq++
-	return c.c.roundTrip(request(c.family, cmd, c.seq, ifindex, name), c.seq)
+	return c.c.roundTrip(req, c.seq)
 }
 
 // Features returns the interface's offload features, keyed by the kernel's feature names.

@@ -11,7 +11,7 @@ var (
 	// ErrNotSupported is the kernel's EOPNOTSUPP: the driver does not implement the query.
 	ErrNotSupported = errors.New("not supported by the driver")
 	// ErrNoDevice is the kernel's ENODEV: the interface is gone, its index and name no longer match, or it is still registered but its device
-	// is not present (a driver reset, a fatal firmware error, suspend).
+	// is not present (a driver reset, a fatal firmware error, suspend). A name no interface can have gets it too, without being sent.
 	ErrNoDevice = errors.New("no such device")
 	// ErrNoFamily means the generic-netlink controller does not know the ethtool family: the kernel is older than 5.6, or was built without
 	// CONFIG_ETHTOOL_NETLINK.
@@ -138,10 +138,25 @@ const (
 	linuxEOPNOTSUPP = 95
 )
 
-// familyRequest asks the generic-netlink controller for the ethtool family's id.
+// ifNameSize is the kernel's IFNAMSIZ: an interface name is at most ifNameSize-1 bytes, and the kernel compares the name in a request with
+// the interface's own over at most ifNameSize bytes.
+const ifNameSize = 16
+
+// The family request's lengths: all of it but seq is fixed. They are constants, and converting a constant is checked by the compiler, so
+// they are known to fit their header fields.
+const (
+	familyNameAttrLen = nlaHdrLen + len(ethtoolFamilyName) + 1 // the name and its NUL
+	familyRequestLen  = nlmsgHdrLen + genlHdrLen + (familyNameAttrLen+3)&^3
+)
+
+// familyRequest asks the generic-netlink controller for the ethtool family's id. TestFamilyRequest checks it against the tests' general
+// encoders.
 func familyRequest(seq uint32) []byte {
-	payload := append([]byte{ctrlCmdGetFamily, genlVersion, 0, 0}, stringAttr(ctrlAttrFamilyName, ethtoolFamilyName)...)
-	return encodeMessage(genlIDCtrl, nlmFRequest, seq, payload)
+	b := appendMessageHeader(make([]byte, 0, familyRequestLen), genlIDCtrl, nlmFRequest, seq, uint32(familyRequestLen))
+	b = append(b, ctrlCmdGetFamily, genlVersion, 0, 0)
+	b = appendAttrHeader(b, ctrlAttrFamilyName, uint16(familyNameAttrLen))
+	b = append(b, ethtoolFamilyName...)
+	return b[:familyRequestLen] // the NUL and padding are already zero
 }
 
 // parseFamilyID returns the family id from the controller's reply to familyRequest; the controller answers ENOENT for a family it does not know.
@@ -171,11 +186,30 @@ func parseFamilyID(msgs []message) (uint16, error) {
 // request returns an ethtool query of one interface. The header names it by both index and name: the kernel answers ENODEV when they do
 // not match, so an index reused by another interface since the caller read it is not answered for. Header flags of 0 ask for verbose
 // bitsets, which list each bit with its name.
-func request(family uint16, cmd uint8, seq uint32, ifindex uint32, name string) []byte {
-	header := encodeNested(ethtoolAHeader,
-		u32Attr(ethtoolAHeaderDevIndex, ifindex), stringAttr(ethtoolAHeaderDevName, name), u32Attr(ethtoolAHeaderFlags, 0))
-	payload := append([]byte{cmd, genlVersion, 0, 0}, header...)
-	return encodeMessage(family, nlmFRequest, seq, payload)
+//
+// The kernel compares the name with the interface's over at most ifNameSize bytes, and stops at a NUL. So a name no interface can have,
+// empty, longer than ifNameSize-1 bytes or holding a NUL, could never match, or would match on its part before the NUL: it gets the kernel's
+// own answer, ErrNoDevice, without being sent.
+//
+// A name that can be an interface's keeps the whole request under 64 bytes, so its lengths are computed rather than checked;
+// TestRequestEncodesAsTheFixtures checks it against the tests' general encoders.
+func request(family uint16, cmd uint8, seq uint32, ifindex uint32, name string) ([]byte, error) {
+	if len(name) == 0 || len(name) >= ifNameSize || strings.IndexByte(name, 0) >= 0 {
+		return nil, fmt.Errorf("interface name of %d bytes cannot be an interface's (1 to %d bytes, no NUL): %w", len(name), ifNameSize-1, ErrNoDevice)
+	}
+	nameLen := nlaHdrLen + len(name) + 1                                         // DEV_NAME: the name and its NUL
+	headerLen := nlaHdrLen + (nlaHdrLen + 4) + align4(nameLen) + (nlaHdrLen + 4) // the nest: DEV_INDEX, DEV_NAME, FLAGS
+	msgLen := nlmsgHdrLen + genlHdrLen + headerLen
+
+	b := appendMessageHeader(make([]byte, 0, msgLen), family, nlmFRequest, seq, uint32(msgLen))
+	b = append(b, cmd, genlVersion, 0, 0)
+	b = appendAttrHeader(b, ethtoolAHeader|nlaFNested, uint16(headerLen))
+	b = appendU32Attr(b, ethtoolAHeaderDevIndex, ifindex)
+	b = appendAttrHeader(b, ethtoolAHeaderDevName, uint16(nameLen))
+	b = append(b, name...)
+	b = b[:len(b)+align4(nameLen)-nameLen+1] // the NUL and padding, already zero in the capacity
+	b = appendU32Attr(b, ethtoolAHeaderFlags, 0)
+	return b, nil
 }
 
 // replyError returns the first NLMSG_ERROR with a nonzero code as an error: ErrNotSupported, ErrNoDevice, or the syscall.Errno. An ACK (code 0)
