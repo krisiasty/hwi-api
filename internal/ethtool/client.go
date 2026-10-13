@@ -21,7 +21,8 @@ type conn interface {
 // "fec"), so that it reads on its own; errors.Is still finds ErrNotSupported, ErrNoDevice or os.ErrDeadlineExceeded through it.
 //
 // Every query names the interface by both its index and its name, as sysfs lists them; the kernel answers ErrNoDevice when they do not
-// match, such as after a rename, rather than about whichever interface now has the index.
+// match, such as after a rename, rather than about whichever interface now has the index. A name no interface can have gets ErrNoDevice
+// without being sent.
 type Client struct {
 	c      conn
 	family uint16

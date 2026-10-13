@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"math"
 )
 
 // Netlink framing, from include/uapi/linux/netlink.h. Every multi-byte field is in the host's byte order.
@@ -40,61 +39,30 @@ func align4(n int) int {
 	return (n + 3) &^ 3
 }
 
-// encodeMessage returns a netlink message with a zero port id, padded to a 4-byte boundary; nlmsg_len counts the header and payload but not the
-// padding, as the kernel's NLMSG_LENGTH does. A message too long for nlmsg_len is an error: truncating the length would corrupt the request.
-func encodeMessage(typ, flags uint16, seq uint32, payload []byte) ([]byte, error) {
-	if n := nlmsgHdrLen + len(payload); uint64(n) > math.MaxUint32 {
-		return nil, fmt.Errorf("netlink message of %d bytes overflows nlmsg_len", n)
-	}
-	return newMessage(typ, flags, seq, payload), nil
-}
+// The agent sends two messages, familyRequest and request, and builds both with the header writers below. Each takes the length as its field's
+// own type, so a length must be converted to reach one, and no conversion can truncate: familyRequest's lengths are constants, whose
+// conversion the compiler checks, and request's are bounded by its check of the interface name. There is no general encoder that a length
+// too long for its field could reach.
 
-// newMessage is encodeMessage without the length check: it is the only place the message header is written. Only a payload of a fixed, small
-// size, as familyRequest's, may reach it directly; anything else goes through encodeMessage.
-func newMessage(typ, flags uint16, seq uint32, payload []byte) []byte {
-	n := nlmsgHdrLen + len(payload)
-	b := make([]byte, nlmsgHdrLen, align4(n))
-	binary.NativeEndian.PutUint32(b[0:], uint32(n))
-	binary.NativeEndian.PutUint16(b[4:], typ)
-	binary.NativeEndian.PutUint16(b[6:], flags)
-	binary.NativeEndian.PutUint32(b[8:], seq)
-	b = append(b, payload...)
-	return b[:align4(n)] // the capacity was allocated zeroed, so this exposes zero padding
-}
-
-// encodeAttr returns one attribute followed by the zero padding that brings it to a 4-byte boundary. An attribute too long for nla_len is an
-// error: truncating the length would corrupt the request.
-func encodeAttr(typ uint16, data []byte) ([]byte, error) {
-	if n := nlaHdrLen + len(data); n > math.MaxUint16 {
-		return nil, fmt.Errorf("netlink attribute of %d bytes overflows nla_len", n)
-	}
-	return appendAttr(nil, typ, data), nil
-}
-
-// appendAttr is encodeAttr without the length check, appending to b: it is the only place the attribute header is written. Only data of a
-// fixed, small size, as u32Attr's and familyRequest's, may reach it directly; anything else goes through encodeAttr.
-func appendAttr(b []byte, typ uint16, data []byte) []byte {
-	n := nlaHdrLen + len(data)
-	b = binary.NativeEndian.AppendUint16(b, uint16(n))
+// appendMessageHeader appends the header of a message of n bytes, header and payload but not padding, as the kernel's NLMSG_LENGTH counts,
+// with a zero port id.
+func appendMessageHeader(b []byte, typ, flags uint16, seq, n uint32) []byte {
+	b = binary.NativeEndian.AppendUint32(b, n)
 	b = binary.NativeEndian.AppendUint16(b, typ)
-	b = append(b, data...)
-	return append(b, make([]byte, align4(n)-n)...)
+	b = binary.NativeEndian.AppendUint16(b, flags)
+	b = binary.NativeEndian.AppendUint32(b, seq)
+	return binary.NativeEndian.AppendUint32(b, 0)
 }
 
-// encodeNested returns a nest attribute holding attrs, which are already encoded (and so already padded). Attributes that fit on their own can
-// still be too long together.
-func encodeNested(typ uint16, attrs ...[]byte) ([]byte, error) {
-	return encodeAttr(typ|nlaFNested, bytes.Join(attrs, nil))
+// appendAttrHeader appends the header of an attribute of n bytes, header and data but not padding.
+func appendAttrHeader(b []byte, typ, n uint16) []byte {
+	b = binary.NativeEndian.AppendUint16(b, n)
+	return binary.NativeEndian.AppendUint16(b, typ)
 }
 
-// u32Attr returns a 32-bit attribute. It is always 8 bytes, so unlike the other encoders it cannot fail.
-func u32Attr(typ uint16, v uint32) []byte {
-	return appendAttr(nil, typ, binary.NativeEndian.AppendUint32(nil, v))
-}
-
-// stringAttr returns a NUL-terminated string attribute, the NLA_NUL_STRING form the kernel's policies expect.
-func stringAttr(typ uint16, s string) ([]byte, error) {
-	return encodeAttr(typ, append([]byte(s), 0))
+// appendU32Attr appends a 32-bit attribute to b.
+func appendU32Attr(b []byte, typ uint16, v uint32) []byte {
+	return binary.NativeEndian.AppendUint32(appendAttrHeader(b, typ, nlaHdrLen+4), v)
 }
 
 // parseMessages splits a receive buffer, which may hold several messages, into its messages.

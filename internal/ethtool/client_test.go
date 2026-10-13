@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"math"
 	"os"
 	"reflect"
 	"strings"
@@ -358,27 +357,28 @@ func TestReplyMessages(t *testing.T) {
 	}
 }
 
-// A name the kernel would not accept, of any length, fails that one query
-// with the same interface-name error, before anything is sent, and uses no
-// sequence number: the next query is sent under the next one.
-func TestQueryRefusesANameTheKernelWouldNot(t *testing.T) {
+// A name no interface can have, empty, longer than IFNAMSIZ allows or
+// holding a NUL, is one the kernel could never match against the index,
+// or would match in part: it gets the kernel's ErrNoDevice, without being
+// sent, and uses no sequence number.
+func TestQueryRefusesANameNoInterfaceCanHave(t *testing.T) {
 	features := genlReply(t, ethtoolMsgFeaturesGetReply,
 		verboseBitset(t, ethtoolAFeaturesHW, true, testBit{index: 1, name: "rx-checksum"}),
 		verboseBitset(t, ethtoolAFeaturesActive, true, testBit{index: 1, name: "rx-checksum"}))
-	for _, n := range []int{0, maxDevNameLen + 1, 65525, math.MaxUint16} {
+	for _, name := range []string{"", strings.Repeat("x", ifNameSize), "eth0\x00stale"} {
 		c, f := newFakeClient(t, map[uint8][]message{ethtoolMsgFeaturesGet: features})
-		_, err := c.Features(4, strings.Repeat("x", n))
-		if err == nil || !strings.Contains(err.Error(), "interface name") {
-			t.Errorf("%d-byte name: Features = %v, want an interface name error", n, err)
+		_, err := c.Features(4, name)
+		if !errors.Is(err, ErrNoDevice) || !strings.Contains(err.Error(), "interface name") {
+			t.Errorf("name %q: Features = %v, want ErrNoDevice naming the interface name", name, err)
 		}
 		if len(f.sent) != 1 {
-			t.Errorf("%d-byte name: %d requests sent after the family lookup, want none", n, len(f.sent)-1)
+			t.Errorf("name %q: %d requests sent after the family lookup, want none", name, len(f.sent)-1)
 		}
-		if _, err := c.Features(4, strings.Repeat("x", maxDevNameLen)); err != nil {
-			t.Fatalf("%d-byte name, then the longest valid one: Features = %v", n, err)
+		if _, err := c.Features(4, strings.Repeat("x", ifNameSize-1)); err != nil {
+			t.Fatalf("name %q, then the longest valid one: Features = %v", name, err)
 		}
 		if got := f.sent[len(f.sent)-1].seq; got != 2 {
-			t.Errorf("%d-byte name: the next query was sent under seq %d, want 2", n, got)
+			t.Errorf("name %q: the next query was sent under seq %d, want 2", name, got)
 		}
 	}
 }

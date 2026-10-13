@@ -4,75 +4,47 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math"
-	"strings"
 	"testing"
 )
 
-// testAttr, testNested, testStringAttr and testMessage build fixtures with
-// the encoders, failing the test on the error each returns for an
-// attribute or message too long for its length field. No fixture comes
-// near that limit.
+// The fixture encoders build what the kernel sends, for the parsers to read: attributes and messages of any shape, which the agent itself
+// never sends. They use the production header writers, and a fixture too long for its length field fails the test rather than being
+// truncated.
+
 func testAttr(t testing.TB, typ uint16, data []byte) []byte {
 	t.Helper()
-	b, err := encodeAttr(typ, data)
-	if err != nil {
-		t.Fatal(err)
+	n := nlaHdrLen + len(data)
+	if n > math.MaxUint16 {
+		t.Fatalf("a fixture attribute of %d bytes overflows nla_len", n)
 	}
-	return b
+	b := appendAttrHeader(make([]byte, 0, align4(n)), typ, uint16(n))
+	b = append(b, data...)
+	return b[:align4(n)] // the capacity was allocated zeroed, so this exposes zero padding
 }
 
 func testNested(t testing.TB, typ uint16, attrs ...[]byte) []byte {
 	t.Helper()
-	b, err := encodeNested(typ, attrs...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b
+	return testAttr(t, typ|nlaFNested, bytes.Join(attrs, nil))
 }
 
 func testStringAttr(t testing.TB, typ uint16, s string) []byte {
 	t.Helper()
-	b, err := stringAttr(typ, s)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b
+	return testAttr(t, typ, append([]byte(s), 0))
+}
+
+func u32Attr(typ uint16, v uint32) []byte {
+	return appendU32Attr(nil, typ, v)
 }
 
 func testMessage(t testing.TB, typ, flags uint16, seq uint32, payload []byte) []byte {
 	t.Helper()
-	b, err := encodeMessage(typ, flags, seq, payload)
-	if err != nil {
-		t.Fatal(err)
+	n := nlmsgHdrLen + len(payload)
+	if uint64(n) > math.MaxUint32 {
+		t.Fatalf("a fixture message of %d bytes overflows nlmsg_len", n)
 	}
-	return b
-}
-
-// An attribute too long for nla_len, a uint16, is an error: never a
-// truncated length, which would corrupt the request, nor a panic.
-func TestEncodersRefuseWhatTheirLengthFieldCannotHold(t *testing.T) {
-	if _, err := encodeAttr(1, make([]byte, math.MaxUint16-nlaHdrLen)); err != nil {
-		t.Errorf("an attribute at the nla_len limit: %v, want it encoded", err)
-	}
-	if b, err := encodeAttr(1, make([]byte, math.MaxUint16-nlaHdrLen+1)); err == nil {
-		t.Errorf("an attribute one byte over the nla_len limit encoded to %d bytes, want an error", len(b))
-	}
-	// Attributes that fit on their own can be too long together.
-	half := testAttr(t, 1, make([]byte, 40000))
-	if b, err := encodeNested(2, half, half); err == nil {
-		t.Errorf("a nest of two 40004-byte attributes encoded to %d bytes, want an error", len(b))
-	}
-	if b, err := stringAttr(3, strings.Repeat("x", math.MaxUint16)); err == nil {
-		t.Errorf("a %d-byte string attribute encoded to %d bytes, want an error", math.MaxUint16, len(b))
-	}
-}
-
-// u32Attr skips the length check, since its attribute is always 8 bytes,
-// but must encode exactly as encodeAttr does.
-func TestU32AttrEncodesAsEncodeAttr(t *testing.T) {
-	if got, want := u32Attr(5, 0x01020304), testAttr(t, 5, binary.NativeEndian.AppendUint32(nil, 0x01020304)); !bytes.Equal(got, want) {
-		t.Errorf("u32Attr = %x, encodeAttr = %x", got, want)
-	}
+	b := appendMessageHeader(make([]byte, 0, align4(n)), typ, flags, seq, uint32(n))
+	b = append(b, payload...)
+	return b[:align4(n)]
 }
 
 func TestMessageRoundTrip(t *testing.T) {

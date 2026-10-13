@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"reflect"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -37,10 +38,28 @@ func u8Attr(t testing.TB, typ uint16, v uint8) []byte {
 	return testAttr(t, typ, []byte{v})
 }
 
+// request lays out its message itself, its lengths bounded by the name it
+// has checked, so it must be exactly what the general fixture encoders
+// build, for names of every length an interface can have.
+func TestRequestEncodesAsTheFixtures(t *testing.T) {
+	for _, name := range []string{"e", "eth4", "enp59s0f0", strings.Repeat("x", ifNameSize-1)} {
+		got, err := request(0x1b, ethtoolMsgFeaturesGet, 9, 4, name)
+		if err != nil {
+			t.Fatalf("request(%q): %v", name, err)
+		}
+		header := testNested(t, ethtoolAHeader, u32Attr(ethtoolAHeaderDevIndex, 4),
+			testStringAttr(t, ethtoolAHeaderDevName, name), u32Attr(ethtoolAHeaderFlags, 0))
+		want := testMessage(t, 0x1b, nlmFRequest, 9, append([]byte{ethtoolMsgFeaturesGet, genlVersion, 0, 0}, header...))
+		if !bytes.Equal(got, want) {
+			t.Errorf("request(%q) = %x, want %x", name, got, want)
+		}
+	}
+}
+
 func TestFamilyRequest(t *testing.T) {
 	req := familyRequest(7)
-	// It is built without the length checks, from fixed input, so it must
-	// be exactly what the checked encoders build.
+	// It lays out its fixed message itself, so it must be exactly what the
+	// general fixture encoders build.
 	want := testMessage(t, genlIDCtrl, nlmFRequest, 7,
 		append([]byte{ctrlCmdGetFamily, genlVersion, 0, 0}, testStringAttr(t, ctrlAttrFamilyName, ethtoolFamilyName)...))
 	if !bytes.Equal(req, want) {
