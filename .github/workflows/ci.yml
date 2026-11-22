@@ -112,7 +112,7 @@ jobs:
       # database is fetched from vuln.go.dev at run time, so a bump improves
       # the analysis, never the data.
       - name: Vulnerability scan (govulncheck)
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
 
   package:
     name: Build and smoke-test the packages
